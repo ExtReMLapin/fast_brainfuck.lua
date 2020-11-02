@@ -84,4 +84,9 @@ data[i] = data[i] + 9
   ```
   
   
+3rd pass requires second as assignation is created by second.
+cmp of 1st only pass vs 1+2+3
 
+![](https://i.imgur.com/usYygmh.png)
+![](https://i.imgur.com/6606Uyx.png)
+![](https://i.imgur.com/sT1Wh68.png)
