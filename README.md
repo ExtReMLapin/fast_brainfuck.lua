@@ -85,7 +85,11 @@ data[i] = data[i] + 9
   
   
 3rd pass requires second as assignation is created by second.
-cmp of 1st only pass vs 1+2+3
+
+#### Here is a CMP of 1 optimization passes.
+Left part is 1st pass only, right is all 3.
+
+
 
 ![](https://i.imgur.com/usYygmh.png)
 ![](https://i.imgur.com/6606Uyx.png)
