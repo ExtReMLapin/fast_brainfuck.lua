@@ -74,24 +74,34 @@ local function secondPassMemset(instList)
 	--269
 	local i = 1
 	local max = #instList
-	local currentFind = 0
+	local currentFindSize = 0
+
 
 	while (i <= max) do
 		if instList[i] == "i=i+1 " and instList[i + 1] and instList[i + 1] == "data[i] = 0 " then
-			currentFind = currentFind + 1
+			currentFindSize = currentFindSize + 1
 			i = i + 1 -- skip two
 		else
-			if currentFind > 1 then
-				local len = currentFind
+			if currentFindSize > 1 then
+				local len = currentFindSize
 				local _i = 0
 
-				while (_i < (currentFind * 2)) do
-					table.remove(instList, i - currentFind * 2)
+				while (_i < (currentFindSize * 2)) do
+					table.remove(instList, i - currentFindSize * 2)
 					_i = _i + 1
 				end
 
-				i = i - (currentFind * 2)
-				table.insert(instList, i, string.format("ffi.fill(data + i + 1, intSize * %i, 0)", len))
+				i = i - (currentFindSize * 2)
+
+				local previousInstSameAssignation = instList[i-1] == "data[i] = 0 "
+
+				if previousInstSameAssignation then
+					table.remove(instList, i-1)
+					i = i - 1
+					table.insert(instList, i, string.format("ffi.fill(data + i, intSize * %i, 0)", len+1))
+				else
+					table.insert(instList, i, string.format("ffi.fill(data + i + 1, intSize * %i, 0)", len))
+				end
 
 				if instList[i + 1]:sub(1, 3) == "i=i" then
 					local modifier = tonumber(instList[i + 1]:sub(4))
@@ -108,7 +118,7 @@ local function secondPassMemset(instList)
 				end
 			end
 
-			currentFind = 0
+			currentFindSize = 0
 		end
 
 		i = i + 1
