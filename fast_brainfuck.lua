@@ -218,7 +218,7 @@ local brainfuck = function(s)
 
 	while (i <= max) do
 		local IR = instList[i]
-		insTableStr[i] = string.format(IRToCode[IR[1]], select(2, unpack(IR)))
+		insTableStr[i] = string.format(IRToCode[IR[1]], select(2, unpack(IR))):gsub("%+%-", "-")
 		i = i + 1
 	end
 
@@ -249,6 +249,7 @@ end
 
 ]] .. table.concat(insTableStr)
 	local loadstring = loadstring or load
+	print(code)
 	local status = loadstring(code, "brainfuck", "t")
 
 	return status
