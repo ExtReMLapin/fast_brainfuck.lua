@@ -1,17 +1,40 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
-
-local specialInstruction = {
-	["."] = "w(data[i])",
-	[","] = "data[i]=r()",
-	["["] = "while data[i]~=0 do ",
-	["]"] = "end "
+local artithmeticsIns = {
+	["+"] = 1,
+	["-"] = -1,
+	[">"] = 1,
+	["<"] = -1
 }
 
-local artithmeticsIns = {
-	["+"] = "data[i] = data[i]+",
-	["-"] = "data[i] = data[i]-",
-	[">"] = "i=i+",
-	["<"] = "i=i-"
+local INC = 1
+local MOVE = 2
+local PRINT = 3
+local LOOPSTART = 4
+local LOOPEND = 5
+local READ = 6
+local ASSIGNATION = 7
+local MEMSET = 8
+
+local instructions = {
+	["+"] = INC,
+	["-"] = INC,
+	[">"] = MOVE,
+	["<"] = MOVE,
+	["["] = LOOPSTART,
+	["]"] = LOOPEND,
+	["."] = PRINT,
+	[","] = READ
+}
+
+local IRToCode = {
+	[INC] = "data[i]=data[i]+%i ",
+	[MOVE] = "i=i+%i ",
+	[LOOPSTART] = "while data[i]~=0 do ",
+	[LOOPEND] = "end ",
+	[PRINT] = "w(data[i])",
+	[READ] = "data[i]=r()",
+	[ASSIGNATION] = "data[i]=%i ",
+	[MEMSET] = "ffi.fill(data+i+%i, intSize * %i, %i)"
 }
 
 local vmSettings = {
@@ -30,13 +53,12 @@ local function firstPassOptimization(instList)
 	local i = 1
 	local max = #instList
 
-	while (i <= max) do
-		if instList[i] == "while data[i]~=0 do " and (max - i >= 2) then
-			if (instList[i + 1]:sub(1, 17) == "data[i] = data[i]") and instList[i + 2] == "end " then
-				table.remove(instList, i)
-				table.remove(instList, i)
-				instList[i] = "data[i] = 0 "
-			end
+	while (i <= max - 3) do
+		if instList[i][1] == LOOPSTART and instList[i + 1][1] == INC and instList[i + 2][1] == LOOPEND then
+			table.remove(instList, i)
+			table.remove(instList, i)
+			instList[i] = {ASSIGNATION, 0}
+			max = max - 2
 		end
 
 		i = i + 1
@@ -68,57 +90,72 @@ local function secondPassMemset(instList)
 	vvvvvvvvvvvvvv
 	ffi.fill(data + i, ffi.sizeof("int") * 9, 0)
 	i = i + 9
-	it also might automerge with second i+i instruction and remive if sum is zero
-
+	it also might automerge with second i+i instruction and remove if sum is zero
 ]]
-	--269
 	local i = 1
+	local minimumAssignations = 2
 	local max = #instList
 	local currentFindSize = 0
+	local currentAssignation = 0
 
+	while (i <= max - 2) do
+		if instList[i][1] == MOVE and instList[i][2] == 1 and instList[i + 1][1] == ASSIGNATION then
+			currentFindSize = 1
+			currentAssignation = instList[i + 1][2]
+			local i2 = i + 2
 
-	while (i <= max) do
-		if instList[i] == "i=i+1 " and instList[i + 1] and instList[i + 1] == "data[i] = 0 " then
-			currentFindSize = currentFindSize + 1
-			i = i + 1 -- skip two
-		else
-			if currentFindSize > 1 then
-				local len = currentFindSize
-				local _i = 0
+			while (i2 <= max) do
+				local ptsShiftCandidate = instList[i2]
+				local dataAssignationCandidate = instList[i2 + 1]
 
-				while (_i < (currentFindSize * 2)) do
-					table.remove(instList, i - currentFindSize * 2)
-					_i = _i + 1
-				end
-
-				i = i - (currentFindSize * 2)
-
-				local previousInstSameAssignation = instList[i-1] == "data[i] = 0 "
-
-				if previousInstSameAssignation then
-					table.remove(instList, i-1)
-					i = i - 1
-					table.insert(instList, i, string.format("ffi.fill(data + i, intSize * %i, 0)", len+1))
-				else
-					table.insert(instList, i, string.format("ffi.fill(data + i + 1, intSize * %i, 0)", len))
-				end
-
-				if instList[i + 1]:sub(1, 3) == "i=i" then
-					local modifier = tonumber(instList[i + 1]:sub(4))
-					len = len + modifier
-
-					--merging i = i - 9 and i = i + 9
-					if len == 0 then
-						table.remove(instList, i + 1)
-					else
-						instList[i + 1] = string.format("i=i+%i ", len)
+				if ptsShiftCandidate[1] ~= MOVE or ptsShiftCandidate[2] ~= 1 or dataAssignationCandidate[1] ~= ASSIGNATION or dataAssignationCandidate[2] ~= currentAssignation then
+					-- create memset instruction
+					if currentFindSize < minimumAssignations then
+						i = i + (currentFindSize * 2) - 1 -- -1 because right after this batch could be another one, don't skip the first member then
+						goto doubleBreak
 					end
+
+					local i3 = 0
+
+					while (i3 < (currentFindSize * 2)) do
+						table.remove(instList, i)
+						i3 = i3 + 1
+					end
+
+					-- the assignation row may not have started with a pointer shift for some reasons, so let's cover this case
+					if instList[i - 1][1] == ASSIGNATION and instList[i - 1][2] == currentAssignation then
+						i = i - 1
+						table.remove(instList, i)
+						table.insert(instList, i, {MEMSET, 0, currentFindSize + 1, currentAssignation})
+						max = max - (currentFindSize + 1) * 2
+					else
+						table.insert(instList, i, {MEMSET, 1, currentFindSize, currentAssignation})
+						max = max - (currentFindSize * 2 - 1)
+					end
+
+					local nextIns = instList[i + 1]
+
+					if nextIns[1] == MOVE then
+						if nextIns[2] + currentFindSize == 0 then
+							table.remove(instList, i + 1)
+							i = i - 1
+						else
+							nextIns[2] = nextIns[2] + currentFindSize
+						end
+					else
+						table.insert(instList, i + 1, {MOVE, currentFindSize})
+						i = i + 1
+					end
+
+					goto doubleBreak
 				else
-					table.insert(instList, i + 1, string.format("i=i+%i ", len))
+					currentFindSize = currentFindSize + 1
 				end
+
+				i2 = i2 + 2
 			end
 
-			currentFindSize = 0
+			::doubleBreak::
 		end
 
 		i = i + 1
@@ -129,38 +166,41 @@ local brainfuck = function(s)
 	s = s:gsub("[^%+%-<>%.,%[%]]+", "") -- remove new lines
 	local instList = {}
 	local slen = #s
-	local i = 2
+	local i = 2 -- 2 because 1st is checked before loop
 	local lastInstruction = s:sub(1, 1)
 	local arithmeticsCount = 0
 
 	if (artithmeticsIns[lastInstruction]) then
-		arithmeticsCount = 1
+		arithmeticsCount = artithmeticsIns[lastInstruction]
 	end
 
 	while (i <= slen) do
 		local curInst = s:sub(i, i)
+		local arithmeticValue = artithmeticsIns[curInst]
 
 		if curInst == lastInstruction then
-			if artithmeticsIns[curInst] then
-				arithmeticsCount = arithmeticsCount + 1
+			if arithmeticValue then
+				arithmeticsCount = arithmeticsCount + arithmeticValue
 			else
-				table.insert(instList, specialInstruction[curInst])
+				table.insert(instList, {instructions[curInst]})
 			end
 		else
 			if artithmeticsIns[lastInstruction] then
-				table.insert(instList, artithmeticsIns[lastInstruction] .. arithmeticsCount .. ' ')
+				if arithmeticsCount ~= 0 then
+					table.insert(instList, {instructions[lastInstruction], arithmeticsCount})
+				end
 
-				if artithmeticsIns[curInst] then
-					arithmeticsCount = 1
+				if arithmeticValue then
+					arithmeticsCount = arithmeticValue
 				else
-					table.insert(instList, specialInstruction[curInst])
+					table.insert(instList, {instructions[curInst]})
 					arithmeticsCount = 0
 				end
 			else
-				if artithmeticsIns[curInst] then
-					arithmeticsCount = 1
+				if arithmeticValue then
+					arithmeticsCount = arithmeticValue
 				else
-					table.insert(instList, specialInstruction[curInst])
+					table.insert(instList, {instructions[curInst]})
 					arithmeticsCount = 0
 				end
 			end
@@ -172,6 +212,16 @@ local brainfuck = function(s)
 
 	firstPassOptimization(instList)
 	secondPassMemset(instList)
+	local insTableStr = {}
+	local i = 1
+	local max = #instList
+
+	while (i <= max) do
+		local IR = instList[i]
+		insTableStr[i] = string.format(IRToCode[IR[1]], select(2, unpack(IR)))
+		i = i + 1
+	end
+
 	local code = [[local data;
 local intSize
 local ffi
@@ -197,7 +247,7 @@ local r = function()
 	return io.read(1):byte()
 end
 
-]] .. table.concat(instList)
+]] .. table.concat(insTableStr)
 	local loadstring = loadstring or load
 	local status = loadstring(code, "brainfuck", "t")
 
@@ -205,9 +255,11 @@ end
 end
 
 (function(arg)
-	local f = io.open(arg[1])
+	--local t = os.clock()
+	local f = io.open(arg[1] or "mandel.b")
 	local text = f:read("*a")
 	f:close()
 	local brainfuckFunc = brainfuck(text)
 	brainfuckFunc()
+	--print(os.clock() - t)
 end)(arg)
