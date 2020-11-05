@@ -14,6 +14,8 @@ local LOOPEND = 5
 local READ = 6
 local ASSIGNATION = 7
 local MEMSET = 8
+local UNROLLED_ASSIGNATION = 9
+
 
 local instructions = {
 	["+"] = INC,
@@ -34,7 +36,8 @@ local IRToCode = {
 	[PRINT] = "w(data[i])",
 	[READ] = "data[i]=r()",
 	[ASSIGNATION] = "data[i]=%i ",
-	[MEMSET] = "ffi.fill(data+i+%i, intSize * %i, %i)"
+	[MEMSET] = "ffi.fill(data+i+%i, intSize * %i, %i)",
+	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 ", -- slower, not used
 }
 
 local vmSettings = {
@@ -64,6 +67,106 @@ local function firstPassOptimization(instList)
 		i = i + 1
 	end
 end
+
+local function thirdPassUnRolledAssignation(instList)
+
+--[[
+
+	while data[i] ~= 0 do
+		data[i] = data[i] - 1 (inc1)
+		i = i + 9 (jmp1)
+		data[i] = data[i] + 1 (inc2)
+		i = i - 9 (jmp2, unused)
+	end
+
+	i = i + 9 (jmp1)
+
+	to
+	data[i+jmp1] = data[i+jmp1] + (-(data[i]/inc1))*inc2
+	data[i] = 0
+	i = i + jmp1
+
+	
+
+	and--------------------------------------------------
+
+
+	while data[i] ~= 0 do
+		i = i - 1 (jmp1)
+		data[i] = data[i] + 3 (inc1)
+		i = i + 1 (jmp2)
+		data[i] = data[i] - 1 (inc2)
+	end
+
+	i = i - 1 (jmp1)
+
+
+	to
+
+	data[i+jmp1] = data[i+jmp1] = (-(data[i]/inc2))*inc1
+	data[i] = 0
+	i = i + jmp1
+
+
+
+	]]
+
+
+	local i = 1
+	local max = #instList
+	--	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 i = i + %i",
+
+	while (i <= max - 7) do
+		if instList[i][1] == LOOPSTART and instList[i + 5][1] == LOOPEND and instList[i + 6][1] == MOVE then
+
+			if 	instList[i + 1][1] == INC and
+				instList[i + 2][1] == MOVE and
+				instList[i + 3][1] == INC and
+				instList[i + 4][1] == MOVE and
+				instList[i + 2][2] == -instList[i + 4][2] and
+				instList[i + 6][2] == instList[i + 2][2] then
+					local jmp = instList[i + 2][2]
+					local inc1 = instList[i + 1][2]
+					local inc2 = instList[i + 3][2]
+					table.remove(instList, i)
+					table.remove(instList, i)
+					table.remove(instList, i)
+					table.remove(instList, i)
+					table.remove(instList, i)
+
+					instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc1, inc2 }
+					max = max - 5
+
+
+--  [UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 i = i + %i"
+			elseif 	instList[i + 1][1] == MOVE and
+					instList[i + 2][1] == INC and
+					instList[i + 3][1] == MOVE and
+					instList[i + 4][1] == INC and
+					instList[i + 1][2] == -instList[i + 3][2] and
+					instList[i + 6][2] == instList[i + 1][2] then
+					local jmp = instList[i + 1][2]
+					local inc1 = instList[i + 2][2]
+					local inc2 = instList[i + 4][2]
+					table.remove(instList, i)
+					table.remove(instList, i)
+					table.remove(instList, i)
+					table.remove(instList, i)
+					table.remove(instList, i)
+
+					instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc2, inc1}
+					max = max - 5
+
+
+			end
+
+		end
+
+
+		i = i + 1
+	end
+end
+
 
 local function secondPassMemset(instList)
 	if type(rawget(_G, "jit")) ~= "table" then return end
@@ -212,6 +315,7 @@ local brainfuck = function(s)
 
 	firstPassOptimization(instList)
 	secondPassMemset(instList)
+	thirdPassUnRolledAssignation(instList)
 	local insTableStr = {}
 	local i = 1
 	local max = #instList
@@ -249,18 +353,19 @@ end
 
 ]] .. table.concat(insTableStr)
 	local loadstring = loadstring or load
-	print(code)
+
 	local status = loadstring(code, "brainfuck", "t")
 
 	return status
 end
 
 (function(arg)
-	--local t = os.clock()
+	
 	local f = io.open(arg[1] or "mandel.b")
 	local text = f:read("*a")
 	f:close()
 	local brainfuckFunc = brainfuck(text)
+	--local t = os.clock()
 	brainfuckFunc()
 	--print(os.clock() - t)
 end)(arg)
