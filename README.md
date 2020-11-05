@@ -84,6 +84,31 @@ data[i] = data[i] + 9
   ```
   
   
+  #### 4. Unrolled assignation based on another variable
+  
+  pretty much turning
+  
+  ```lua
+  	while data[i] ~= 0 do
+		i = i - 1 (jmp1)
+		data[i] = data[i] + 3 (inc1)
+		i = i + 1 (jmp2)
+		data[i] = data[i] - 1 (inc2)
+	end
+
+	i = i - 1 (jmp1)
+```
+
+into
+
+
+```lua
+	data[i+jmp1] = data[i+jmp1] = (-(data[i]/inc2))*inc1
+	data[i] = 0
+	i = i + jmp1
+```
+
+  
 3rd pass requires second as assignation is created by second.
 
 #### CMP of the optimization passes.
