@@ -17,7 +17,7 @@ Tested on Ryzen 3700x | 32gb ram 2400mhz
 I'm not sure exactly how to correctly call the following optimization.
 
 
-#### 1. Arithmetics merging
+#### 1. Folding
 
 Turning for example
 ```lua
@@ -112,10 +112,10 @@ into
 3rd pass requires second as assignation is created by second.
 
 #### CMP of the optimization passes.
-Left part is 1st pass only, right is all 3.
+Left part is 1st pass only, right is all 4.
 
 
 
-![](https://i.imgur.com/usYygmh.png)
-![](https://i.imgur.com/6606Uyx.png)
-![](https://i.imgur.com/sT1Wh68.png)
+![](https://i.imgur.com/qdvQXRi.png)
+![](https://i.imgur.com/tvvbs6j.png)
+![](https://i.imgur.com/qPoTKn9.png)
