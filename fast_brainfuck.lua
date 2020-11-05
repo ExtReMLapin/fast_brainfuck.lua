@@ -1,4 +1,5 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
+jit.opt.start("loopunroll=100")
 local artithmeticsIns = {
 	["+"] = 1,
 	["-"] = -1,
@@ -315,7 +316,7 @@ local brainfuck = function(s)
 
 	firstPassOptimization(instList)
 	secondPassMemset(instList)
-	thirdPassUnRolledAssignation(instList)
+	--thirdPassUnRolledAssignation(instList)
 	local insTableStr = {}
 	local i = 1
 	local max = #instList
@@ -365,7 +366,7 @@ end
 	local text = f:read("*a")
 	f:close()
 	local brainfuckFunc = brainfuck(text)
-	--local t = os.clock()
+	local t = os.clock()
 	brainfuckFunc()
-	--print(os.clock() - t)
+	print(os.clock() - t)
 end)(arg)
