@@ -1,5 +1,18 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
-if (jit) then jit.opt.start("loopunroll=100") end
+if jit then jit.opt.start("loopunroll=100") end
+
+local vmSettings = {
+	ram = 32768,
+	cellType = "char",
+
+}
+local ffi
+local intSize;
+if jit then
+	ffi = require("ffi")
+	intSize = ffi.sizeof(vmSettings.cellType)
+end
+
 
 local artithmeticsIns = {
 	["+"] = 1,
@@ -38,14 +51,10 @@ local IRToCode = {
 	[PRINT] = "w(data[i])",
 	[READ] = "data[i]=r()",
 	[ASSIGNATION] = "data[i]=%i ",
-	[MEMSET] = "ffi.fill(data+i+%i, intSize * %i, %i)",
+	[MEMSET] = "ffi.fill(data+i+%i, %i, %i)",
 	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 ", -- slower, not used
 }
 
-local vmSettings = {
-	ram = 32768,
-	cellType = "int"
-}
 
 local function firstPassOptimization(instList)
 	--[[
@@ -231,10 +240,10 @@ local function secondPassMemset(instList)
 					if instList[i - 1][1] == ASSIGNATION and instList[i - 1][2] == currentAssignation then
 						i = i - 1
 						table.remove(instList, i)
-						table.insert(instList, i, {MEMSET, 0, currentFindSize + 1, currentAssignation})
+						table.insert(instList, i, {MEMSET, 0, (currentFindSize + 1) * intSize, currentAssignation})
 						max = max - (currentFindSize + 1) * 2
 					else
-						table.insert(instList, i, {MEMSET, 1, currentFindSize, currentAssignation})
+						table.insert(instList, i, {MEMSET, 1, currentFindSize * intSize, currentAssignation})
 						max = max - (currentFindSize * 2 - 1)
 					end
 
@@ -317,11 +326,11 @@ local brainfuck = function(s)
 
 	firstPassOptimization(instList)
 	secondPassMemset(instList)
-	--thirdPassUnRolledAssignation(instList)
+	thirdPassUnRolledAssignation(instList)
 	local insTableStr = {}
 	local i = 1
 	local max = #instList
-
+	local unpack = unpack or table.unpack
 	while (i <= max) do
 		local IR = instList[i]
 		insTableStr[i] = string.format(IRToCode[IR[1]], select(2, unpack(IR))):gsub("%+%-", "-")
@@ -329,12 +338,10 @@ local brainfuck = function(s)
 	end
 
 	local code = [[local data;
-local intSize
 local ffi
 if type(rawget(_G, "jit")) == 'table' then
 	ffi = require("ffi")
 	data = ffi.new("]] .. vmSettings.cellType .. "[" .. vmSettings.ram .. [[]")
-	intSize = ffi.sizeof("]] .. vmSettings.cellType .. [[")
 else
 	data = {}
 	local i = 0
@@ -355,7 +362,6 @@ end
 
 ]] .. table.concat(insTableStr)
 	local loadstring = loadstring or load
-
 	local status = loadstring(code, "brainfuck", "t")
 
 	return status
@@ -367,7 +373,7 @@ end
 	local text = f:read("*a")
 	f:close()
 	local brainfuckFunc = brainfuck(text)
-	local t = os.clock()
+	--local t = os.clock()
 	brainfuckFunc()
-	print(os.clock() - t)
+	--print(os.clock() - t)
 end)(arg)
