@@ -1,5 +1,6 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
-jit.opt.start("loopunroll=100")
+if (jit) then jit.opt.start("loopunroll=100") end
+
 local artithmeticsIns = {
 	["+"] = 1,
 	["-"] = -1,
