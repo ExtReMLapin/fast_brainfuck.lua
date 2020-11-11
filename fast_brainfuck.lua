@@ -52,7 +52,7 @@ local IRToCode = {
 	[READ] = "data[i]=r()",
 	[ASSIGNATION] = "data[i]=%i ",
 	[MEMSET] = "ffi.fill(data+i+%i, %i, %i)",
-	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 ", -- slower, not used
+	[UNROLLED_ASSIGNATION] = "if (data[i] ~= 0) then data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 end ", -- slower, not used
 }
 
 
