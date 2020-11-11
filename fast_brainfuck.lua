@@ -232,7 +232,7 @@ local function secondPassMemset(instList)
 
 				if ptsShiftCandidate[1] ~= MOVE or ptsShiftCandidate[2] ~= 1 or dataAssignationCandidate[1] ~= ASSIGNATION or dataAssignationCandidate[2] ~= currentAssignation then
 					-- create memset instruction
-					if currentFindSize < minimumAssignations then
+					if currentFindSize <= minimumAssignations then
 						i = i + (currentFindSize * 2) - 1 -- -1 because right after this batch could be another one, don't skip the first member
 						goto doubleBreak
 					end
