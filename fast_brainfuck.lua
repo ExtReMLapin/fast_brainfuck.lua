@@ -282,28 +282,30 @@ local brainfuck = function(s)
 	local instList = {}
 	local slen = #s
 	local i = 2 -- 2 because 1st is checked before loop
-	local lastInstruction = s:sub(1, 1)
+	local lastInst = s:sub(1, 1)
+	local lastInstType = instructions[lastInst]
 	local arithmeticsCount = 0
 
-	if (artithmeticsIns[lastInstruction]) then
-		arithmeticsCount = artithmeticsIns[lastInstruction]
+	if (artithmeticsIns[lastInst]) then
+		arithmeticsCount = artithmeticsIns[lastInst]
 	end
 
 	while (i <= slen) do
 		local curInst = s:sub(i, i)
+		local curInstType = instructions[curInst]
 		--arithmetic instructions are the ones moving pointer or changing pointer value
 		local arithmeticValue = artithmeticsIns[curInst]
 		--folding
-		if curInst == lastInstruction then
+		if curInstType == lastInstType then
 			if arithmeticValue then
 				arithmeticsCount = arithmeticsCount + arithmeticValue
 			else
 				table.insert(instList, {instructions[curInst]})
 			end
 		else
-			if artithmeticsIns[lastInstruction] then
+			if artithmeticsIns[lastInst] then
 				if arithmeticsCount ~= 0 then
-					table.insert(instList, {instructions[lastInstruction], arithmeticsCount})
+					table.insert(instList, {instructions[lastInst], arithmeticsCount})
 				end
 
 				if arithmeticValue then
@@ -322,7 +324,8 @@ local brainfuck = function(s)
 			end
 		end
 
-		lastInstruction = curInst
+		lastInst = curInst
+		lastInstType = curInstType
 		i = i + 1
 	end
 
@@ -365,7 +368,6 @@ end
 
 ]] .. table.concat(insTableStr)
 	local loadstring = loadstring or load
-
 	local status = loadstring(code, string.format("Brainfuck Interpreter %p",instList ))
 
 	return status
