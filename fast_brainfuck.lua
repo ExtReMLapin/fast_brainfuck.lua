@@ -102,12 +102,12 @@ local function thirdPassUnRolledAssignation(instList)
 		i = i - 9 (jmp2, unused)
 	end
 
-	i = i + 9 (jmp1)
+
 
 	to
 	data[i+jmp1] = data[i+jmp1] + (-(data[i]/inc1))*inc2
 	data[i] = 0
-	i = i + jmp1
+
 
 	
 
@@ -121,33 +121,27 @@ local function thirdPassUnRolledAssignation(instList)
 		data[i] = data[i] - 1 (inc2)
 	end
 
-	i = i - 1 (jmp1)
 
 
 	to
 
 	data[i+jmp1] = data[i+jmp1] = (-(data[i]/inc2))*inc1
 	data[i] = 0
-	i = i + jmp1
 
-
-
-	]]
+]]
 
 
 	local i = 1
 	local max = #instList
-	--	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 i = i + %i",
 
 	while (i <= max - 7) do
-		if instList[i][1] == LOOPSTART and instList[i + 5][1] == LOOPEND and instList[i + 6][1] == MOVE then
-
+		if instList[i][1] == LOOPSTART and instList[i + 5][1] == LOOPEND then
+			-- see above comments to see the two possible inputs
 			if 	instList[i + 1][1] == INC and
 				instList[i + 2][1] == MOVE and
 				instList[i + 3][1] == INC and
 				instList[i + 4][1] == MOVE and
-				instList[i + 2][2] == -instList[i + 4][2] and
-				instList[i + 6][2] == instList[i + 2][2] then
+				instList[i + 2][2] == -instList[i + 4][2] then
 					local jmp = instList[i + 2][2]
 					local inc1 = instList[i + 1][2]
 					local inc2 = instList[i + 3][2]
@@ -159,15 +153,11 @@ local function thirdPassUnRolledAssignation(instList)
 
 					instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc1, inc2 }
 					max = max - 5
-
-
---  [UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 i = i + %i"
 			elseif 	instList[i + 1][1] == MOVE and
 					instList[i + 2][1] == INC and
 					instList[i + 3][1] == MOVE and
 					instList[i + 4][1] == INC and
-					instList[i + 1][2] == -instList[i + 3][2] and
-					instList[i + 6][2] == instList[i + 1][2] then
+					instList[i + 1][2] == -instList[i + 3][2] then
 						local jmp = instList[i + 1][2]
 						local inc1 = instList[i + 2][2]
 						local inc2 = instList[i + 4][2]
@@ -179,8 +169,6 @@ local function thirdPassUnRolledAssignation(instList)
 
 						instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc2, inc1}
 						max = max - 5
-
-
 			end
 
 		end
@@ -377,6 +365,7 @@ end
 
 ]] .. table.concat(insTableStr)
 	local loadstring = loadstring or load
+
 	local status = loadstring(code, string.format("Brainfuck Interpreter %p",instList ))
 
 	return status
