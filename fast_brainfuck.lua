@@ -68,11 +68,13 @@ local function firstPassOptimization(instList)
 	local max = #instList
 
 	while (i <= max - 3) do
-		if instList[i][1] == LOOPSTART and instList[i + 1][1] == INC and instList[i + 2][1] == LOOPEND then
-			table.remove(instList, i)
-			table.remove(instList, i)
-			instList[i] = {ASSIGNATION, 0}
-			max = max - 2
+		if 	instList[i][1] == LOOPSTART and
+			instList[i + 1][1] == INC and
+			instList[i + 2][1] == LOOPEND then
+				table.remove(instList, i)
+				table.remove(instList, i)
+				instList[i] = {ASSIGNATION, 0}
+				max = max - 2
 		end
 
 		i = i + 1
@@ -156,17 +158,17 @@ local function thirdPassUnRolledAssignation(instList)
 					instList[i + 4][1] == INC and
 					instList[i + 1][2] == -instList[i + 3][2] and
 					instList[i + 6][2] == instList[i + 1][2] then
-					local jmp = instList[i + 1][2]
-					local inc1 = instList[i + 2][2]
-					local inc2 = instList[i + 4][2]
-					table.remove(instList, i)
-					table.remove(instList, i)
-					table.remove(instList, i)
-					table.remove(instList, i)
-					table.remove(instList, i)
+						local jmp = instList[i + 1][2]
+						local inc1 = instList[i + 2][2]
+						local inc2 = instList[i + 4][2]
+						table.remove(instList, i)
+						table.remove(instList, i)
+						table.remove(instList, i)
+						table.remove(instList, i)
+						table.remove(instList, i)
 
-					instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc2, inc1}
-					max = max - 5
+						instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc2, inc1}
+						max = max - 5
 
 
 			end
@@ -225,18 +227,19 @@ local function secondPassMemset(instList)
 				if ptsShiftCandidate[1] ~= MOVE or ptsShiftCandidate[2] ~= 1 or dataAssignationCandidate[1] ~= ASSIGNATION or dataAssignationCandidate[2] ~= currentAssignation then
 					-- create memset instruction
 					if currentFindSize < minimumAssignations then
-						i = i + (currentFindSize * 2) - 1 -- -1 because right after this batch could be another one, don't skip the first member then
+						i = i + (currentFindSize * 2) - 1 -- -1 because right after this batch could be another one, don't skip the first member
 						goto doubleBreak
 					end
 
 					local i3 = 0
-
+					-- clear the instruction so you can replace them by the memset one
 					while (i3 < (currentFindSize * 2)) do
 						table.remove(instList, i)
 						i3 = i3 + 1
 					end
 
 					-- the assignation row may not have started with a pointer shift for some reasons, so let's cover this case
+					-- we handle the possible ptr+1 or just ptr as starting mem pos
 					if instList[i - 1][1] == ASSIGNATION and instList[i - 1][2] == currentAssignation then
 						i = i - 1
 						table.remove(instList, i)
@@ -248,7 +251,7 @@ local function secondPassMemset(instList)
 					end
 
 					local nextIns = instList[i + 1]
-
+					-- folding with next possible ptr ins
 					if nextIns[1] == MOVE then
 						if nextIns[2] + currentFindSize == 0 then
 							table.remove(instList, i + 1)
@@ -290,8 +293,9 @@ local brainfuck = function(s)
 
 	while (i <= slen) do
 		local curInst = s:sub(i, i)
+		--arithmetic instructions are the ones moving pointer or changing pointer value
 		local arithmeticValue = artithmeticsIns[curInst]
-
+		--folding
 		if curInst == lastInstruction then
 			if arithmeticValue then
 				arithmeticsCount = arithmeticsCount + arithmeticValue
@@ -330,6 +334,7 @@ local brainfuck = function(s)
 	local insTableStr = {}
 	local i = 1
 	local max = #instList
+	-- lua 54 & jit compatiblity
 	local unpack = unpack or table.unpack
 	while (i <= max) do
 		local IR = instList[i]
@@ -362,13 +367,12 @@ end
 
 ]] .. table.concat(insTableStr)
 	local loadstring = loadstring or load
-	local status = loadstring(code, "brainfuck", "t")
+	local status = loadstring(code, string.format("Brainfuck Interpreter %p",instList ))
 
 	return status
 end
 
 (function(arg)
-	
 	local f = io.open(arg[1] or "mandel.b")
 	local text = f:read("*a")
 	f:close()
