@@ -8,7 +8,7 @@ Tested on Ryzen 3700x | 32gb ram 2400mhz
 
 | Lua version\Implementation | fast_brainfuck.lua | [brainfuck.lua transpiler](https://github.com/thirteen-io/brainfuck.lua/blob/master/brainfuck.lua) | [brainfuck.lua transpiler](https://raw.githubusercontent.com/prapin/LuaBrainFuck/master/brainfuck.lua)|[bf.lua interpreter](https://github.com/kostya/benchmarks/blob/master/brainfuck/bf.lua)|
 |----------------------------|--------------------|-----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|------|
-| LuaJIT 2.1.0               | **2.185s**            | 38.309s                                                                                             | 34.392s                                                                                                | 53.81s|
+| LuaJIT 2.1.0               | **1.870s**            | 38.309s                                                                                             | 34.392s                                                                                                | 53.81s|
 | Lua 5.4                    | **15.242s**            | 294.12s                                                                                             | 188.39s                                                                                                | very slow|
 
 
