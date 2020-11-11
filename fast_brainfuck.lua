@@ -4,8 +4,8 @@ if jit then jit.opt.start("loopunroll=100") end
 local vmSettings = {
 	ram = 32768,
 	cellType = "char",
-
 }
+
 local ffi
 local intSize;
 if jit then
@@ -73,7 +73,13 @@ local function firstPassOptimization(instList)
 			instList[i + 2][1] == LOOPEND then
 				table.remove(instList, i)
 				table.remove(instList, i)
-				instList[i] = {ASSIGNATION, 0}
+				if instList[i+1][1] == INC then
+					instList[i] = {ASSIGNATION, instList[i+1][2]}
+					table.remove(instList, i+1)
+					max = max - 1
+				else
+					instList[i] = {ASSIGNATION, 0}
+				end
 				max = max - 2
 		end
 
