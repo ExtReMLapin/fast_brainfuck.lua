@@ -10,7 +10,7 @@ Tested on Ryzen 3700x | 32gb ram 2400mhz
 |----------------------------------|--------------------|-----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|------|
 | LuaJIT 2.1.0                     | **1.870s**         | 38.309s                                                                                             | 34.392s                                                                                                | 53.81s|
 | Lua 5.4                          | **15.242s**        | 294.12s                                                                                             | 188.39s                                                                                                | very slow|
-| [Clanc C -Ofast (WSL Layer)](https://github.com/ExtReMLapin/fast_brainfuck.lua/tree/c-transpiler)  | **0.7s**           |             N/A                                                                                      |                N/A                                                                                         |   N/A        |
+| [Clanc C -Ofast](https://github.com/ExtReMLapin/fast_brainfuck.lua/tree/c-transpiler)  | **0.7s**           |             N/A                                                                                      |                N/A                                                                                         |   N/A        |
 
 
 ### Optimization passes
