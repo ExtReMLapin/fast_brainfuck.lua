@@ -1,18 +1,10 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
 if jit then jit.opt.start("loopunroll=100") end
-local STATS = true -- set to true to print optimizations count for each pass
+local STATS = false -- set to true to print optimizations count for each pass
 local vmSettings = {
 	ram = 32768,
-	cellType = "int",
+	cellType = "char",
 }
-
-local ffi
-local intSize;
-if jit then
-	ffi = require("ffi")
-	intSize = ffi.sizeof(vmSettings.cellType)
-end
-
 
 local artithmeticsIns = {
 	["+"] = 1,
@@ -176,38 +168,6 @@ local function thirdPassUnRolledAssignation(instList)
 				goto URA_UnexpectedInstruction
 			end
 
-			--[[
-
-			now we have this piece of pseudocode
-
-			while data[i] ~= 0 do
-				data[i] = data[i] - 1
-				i = i + 1
-				data[i] = data[i] + 2
-				i = i + 3
-				data[i] = data[i] + 5
-				i = i + 1
-				data[i] = data[i] + 2
-				i = i + 1
-				data[i] = data[i] + 1
-				i = i - 6
-			end
-
-
-			turned into this type of valueMap
-
-			0       -1
-			1       2
-			4       5
-			5       2
-			6       1
-
-			
-			[0] is basepointer
-
-			data[i+jmp1] = data[i+jmp1] + (-(data[i]/incBase))*inc1
-
-			]]
 			assert(assignationTable[0] ~= nil, "Expected base pointer in loop")
 
 			max = max - (loopEnd - loopStart) - 1
@@ -277,7 +237,7 @@ local function secondPassMemset(instList)
 	data[i] = 0
 
 	vvvvvvvvvvvvvv
-	ffi.fill(data + i, ffi.sizeof("int") * 9, 0)
+	ffi.fill(data + i,  9, 0)
 	i = i + 9
 	it also might automerge with second i+i instruction and remove if sum is zero
 ]]
@@ -317,10 +277,10 @@ local function secondPassMemset(instList)
 					if instList[i - 1][1] == ASSIGNATION and instList[i - 1][2] == currentAssignation then
 						i = i - 1
 						table.remove(instList, i)
-						table.insert(instList, i, {MEMSET, 0, (currentFindSize + 1) * intSize, currentAssignation})
+						table.insert(instList, i, {MEMSET, 0, currentFindSize + 1, currentAssignation})
 						max = max - (currentFindSize + 1) * 2
 					else
-						table.insert(instList, i, {MEMSET, 1, currentFindSize * intSize, currentAssignation})
+						table.insert(instList, i, {MEMSET, 1, currentFindSize , currentAssignation})
 						max = max - (currentFindSize * 2 - 1)
 					end
 
@@ -459,5 +419,5 @@ end
 	local brainfuckFunc = brainfuck(text)
 	local t = os.clock()
 	brainfuckFunc()
-	if STATS then print(os.clock() - t) end
+	if STATS then print("\nTook (in s): " .. os.clock() - t) end
 end)(arg)
