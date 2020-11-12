@@ -1,6 +1,6 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
 if jit then jit.opt.start("loopunroll=100") end
-local STATS = false -- set to true to print optimizations count for each pass
+local STATS = true -- set to true to print optimizations count for each pass
 local vmSettings = {
 	ram = 32768,
 	cellType = "char",
@@ -25,11 +25,12 @@ local INC = 1
 local MOVE = 2
 local PRINT = 3
 local LOOPSTART = 4
-local LOOPEND = 5
+local END = 5
 local READ = 6
 local ASSIGNATION = 7
 local MEMSET = 8
 local UNROLLED_ASSIGNATION = 9
+local IFSTART = 10
 
 
 local instructions = {
@@ -38,7 +39,7 @@ local instructions = {
 	[">"] = MOVE,
 	["<"] = MOVE,
 	["["] = LOOPSTART,
-	["]"] = LOOPEND,
+	["]"] = END,
 	["."] = PRINT,
 	[","] = READ
 }
@@ -47,12 +48,13 @@ local IRToCode = {
 	[INC] = "data[i]=data[i]+%i ",
 	[MOVE] = "i=i+%i ",
 	[LOOPSTART] = "while data[i]~=0 do ",
-	[LOOPEND] = "end ",
+	[END] = "end ",
 	[PRINT] = "w(data[i])",
 	[READ] = "data[i]=r()",
 	[ASSIGNATION] = "data[i]=%i ",
 	[MEMSET] = "ffi.fill(data+i+%i, %i, %i)",
-	[UNROLLED_ASSIGNATION] = "if (data[i] ~= 0) then data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 end ",
+	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
+	[IFSTART] = "if (data[i] ~= 0) then "
 }
 
 
@@ -70,17 +72,17 @@ local function firstPassOptimization(instList)
 	while (i <= max - 3) do
 		if 	instList[i][1] == LOOPSTART and
 			instList[i + 1][1] == INC and
-			instList[i + 2][1] == LOOPEND then
+			instList[i + 2][1] == END then -- checks for the ins pattern, ignoring the content of the loop beside if it's inc or not
 				table.remove(instList, i)
 				table.remove(instList, i)
-				if instList[i + 1][1] == INC then
+				if instList[i + 1][1] == INC then -- merge with next ins if possible
 					instList[i] = {ASSIGNATION, instList[i + 1][2]}
 					table.remove(instList, i + 1)
 					max = max - 1
 				else
 					instList[i] = {ASSIGNATION, 0}
 				end
-				if (instList[i-1] and instList[i-1][1] == INC) then
+				if (instList[i-1] and instList[i-1][1] == INC) then -- also merge with previous one if possible
 					table.remove(instList, i-1)
 					max = max - 1
 				end
@@ -93,95 +95,157 @@ local function firstPassOptimization(instList)
 	if STATS then print("Assignation pass : ", optimizationCount ) end
 end
 
+
+
 local function thirdPassUnRolledAssignation(instList)
-
---[[
-
-	while data[i] ~= 0 do
-		data[i] = data[i] - 1 (inc1)
-		i = i + 9 (jmp1)
-		data[i] = data[i] + 1 (inc2)
-		i = i - 9 (jmp2, unused)
-	end
+	--[[
 
 
 
-	to
-	data[i+jmp1] = data[i+jmp1] + (-(data[i]/inc1))*inc2
-	data[i] = 0
+
+			while data[i] ~= 0 do
+				data[i] = data[i] - 1 (incBase)
+				i = i + 1 (jmp1)
+				data[i] = data[i] + 2 (inc1)
+				i = i + 3 (jmp2)
+				data[i] = data[i] + 5 (inc2)
+				i = i + 1 (jmp3)
+				data[i] = data[i] + 2 (inc3)
+				i = i + 1 (jmp4)
+				data[i] = data[i] + 1 (inc4)
+				i = i - 6 (jmpReset)
+			end
+			
 
 
-	
+			data[i+jmp1] = data[i+jmp1] + (-(data[i]/incBase))*inc1
+			data[i+jmp2] = data[i+jmp2] + (-(data[i]/incBase))*inc2
+			data[i+jmp3] = data[i+jmp3] + (-(data[i]/incBase))*inc3
+			data[i+jmp4] = data[i+jmp4] + (-(data[i]/incBase))*inc4
+			data[i] = 0
 
 	and--------------------------------------------------
 
 
-	while data[i] ~= 0 do
-		i = i - 1 (jmp1)
-		data[i] = data[i] + 3 (inc1)
-		i = i + 1 (jmp2)
-		data[i] = data[i] - 1 (inc2)
-	end
 
-
-
-	to
-
-	data[i+jmp1] = data[i+jmp1] = (-(data[i]/inc2))*inc1
-	data[i] = 0
+		while data[i] ~= 0 do
+			i = i - 1
+			data[i] = data[i] - 1
+			i = i + 1
+			data[i] = data[i] - 1
+			i = i - 6
+			data[i] = data[i] + 1
+			i = i + 6
+		end
 
 ]]
-
 	local optimizationCount = 0
 	local i = 1
 	local max = #instList
 
-	while (i <= max - 7) do
-		if instList[i][1] == LOOPSTART and instList[i + 5][1] == LOOPEND then
-			-- see above comments to see the two possible inputs
-			if 	instList[i + 1][1] == INC and
-				instList[i + 2][1] == MOVE and
-				instList[i + 3][1] == INC and
-				instList[i + 4][1] == MOVE and
-				instList[i + 2][2] == -instList[i + 4][2] then
-					local jmp = instList[i + 2][2]
-					local inc1 = instList[i + 1][2]
-					local inc2 = instList[i + 3][2]
-					table.remove(instList, i)
-					table.remove(instList, i)
-					table.remove(instList, i)
-					table.remove(instList, i)
-					table.remove(instList, i)
+	while (i <= max - 6) do
+		if instList[i][1] == LOOPSTART then
+			local loopStart = i
+			local loopEnd = i + 1
+			if not instList[loopEnd] then return end
 
-					instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc1, inc2 }
-					max = max - 5
-					optimizationCount = optimizationCount + 1
-			elseif 	instList[i + 1][1] == MOVE and
-					instList[i + 2][1] == INC and
-					instList[i + 3][1] == MOVE and
-					instList[i + 4][1] == INC and
-					instList[i + 1][2] == -instList[i + 3][2] then
-						local jmp = instList[i + 1][2]
-						local inc1 = instList[i + 2][2]
-						local inc2 = instList[i + 4][2]
-						table.remove(instList, i)
-						table.remove(instList, i)
-						table.remove(instList, i)
-						table.remove(instList, i)
-						table.remove(instList, i)
+			local relativePosition = 0
 
-						instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc2, inc1}
-						max = max - 5
-						optimizationCount = optimizationCount + 1
+			local assignationTable = {}
+			while (instList[loopEnd][1] ~= END) do
+				if loopEnd == max then return end
+
+				local curIns = instList[loopEnd][1]
+				local curOperand = instList[loopEnd][2]
+
+				if curIns == MOVE then
+					relativePosition = relativePosition + curOperand
+				elseif curIns == INC then
+					if not assignationTable[relativePosition] then
+						assignationTable[relativePosition] = curOperand
+					else -- not really likely, but let's not close door to potential optimizations
+						assignationTable[relativePosition] = assignationTable[relativePosition] + curOperand
+					end
+				else
+					goto URA_UnexpectedInstruction
+				end
+
+				loopEnd = loopEnd + 1
 			end
+			if relativePosition ~= 0 then
+				goto URA_UnexpectedInstruction
+			end
+
+			--[[
+
+			now we have this piece of pseudocode
+
+			while data[i] ~= 0 do
+				data[i] = data[i] - 1
+				i = i + 1
+				data[i] = data[i] + 2
+				i = i + 3
+				data[i] = data[i] + 5
+				i = i + 1
+				data[i] = data[i] + 2
+				i = i + 1
+				data[i] = data[i] + 1
+				i = i - 6
+			end
+
+
+			turned into this type of valueMap
+
+			0       -1
+			1       2
+			4       5
+			5       2
+			6       1
+
+			
+			[0] is basepointer
+
+			data[i+jmp1] = data[i+jmp1] + (-(data[i]/incBase))*inc1
+
+			]]
+			assert(assignationTable[0] ~= nil, "Expected base pointer in loop")
+
+			max = max - (loopEnd - loopStart) - 1
+			while (loopEnd >= loopStart) do
+				table.remove(instList, loopStart)
+				loopEnd = loopEnd - 1
+			end
+
+
+			table.insert(instList, loopStart, {IFSTART})
+			local assignationCount = 1
+			for jmp, inc in pairs(assignationTable) do
+				if jmp ~= 0 then
+					assignationCount = assignationCount + 1
+					--	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
+					table.insert(instList, loopStart + 1, {UNROLLED_ASSIGNATION, jmp, jmp, assignationTable[0], inc})
+				end
+			end
+
+			-- not assignationCount + 1 as there is already an offset of 1 reserved for 0 assignation of calculated from the loop definition itself
+			table.insert(instList, loopStart + assignationCount, {ASSIGNATION, 0})
+			table.insert(instList, loopStart + assignationCount + 1, {END})
+			max = max + assignationCount + 2 -- +2 because of IFSTART instruction at the start
+			optimizationCount = optimizationCount + assignationCount
+
+
+
+
 
 		end
 
-
+		::URA_UnexpectedInstruction::
 		i = i + 1
 	end
 
-	if STATS then print("Unrolled dynamic assignation pass : ", optimizationCount ) end
+	if STATS then
+		print("Unrolled dynamic assignation pass : ", optimizationCount)
+	end
 end
 
 
@@ -238,7 +302,7 @@ local function secondPassMemset(instList)
 					-- create memset instruction
 					if currentFindSize < minimumAssignations then
 						i = i + (currentFindSize * 2) - 1 -- -1 because right after this batch could be another one, don't skip the first member
-						goto doubleBreak
+						goto doubleBreakMemset
 					end
 
 					local i3 = 0
@@ -274,7 +338,7 @@ local function secondPassMemset(instList)
 						i = i + 1
 					end
 					optimizationCount = optimizationCount + 1
-					goto doubleBreak
+					goto doubleBreakMemset
 				else
 					currentFindSize = currentFindSize + 1
 				end
@@ -282,7 +346,7 @@ local function secondPassMemset(instList)
 				i2 = i2 + 2
 			end
 
-			::doubleBreak::
+			::doubleBreakMemset::
 		end
 
 		i = i + 1
@@ -384,7 +448,7 @@ end
 ]] .. table.concat(insTableStr)
 	local loadstring = loadstring or load
 	local status = loadstring(code, string.format("Brainfuck Interpreter %p",instList ))
-
+	--print(code) do return end
 	return status
 end
 
