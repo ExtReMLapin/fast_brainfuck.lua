@@ -1,6 +1,6 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
 if jit then jit.opt.start("loopunroll=100") end
-
+local STATS = false
 local vmSettings = {
 	ram = 32768,
 	cellType = "char",
@@ -66,7 +66,7 @@ local function firstPassOptimization(instList)
 ]]
 	local i = 1
 	local max = #instList
-
+	local optimizationCount = 0
 	while (i <= max - 3) do
 		if 	instList[i][1] == LOOPSTART and
 			instList[i + 1][1] == INC and
@@ -85,10 +85,12 @@ local function firstPassOptimization(instList)
 					max = max - 1
 				end
 				max = max - 2
+				optimizationCount = optimizationCount + 1
 		end
 
 		i = i + 1
 	end
+	if STATS then print("Assignation pass : ", optimizationCount ) end
 end
 
 local function thirdPassUnRolledAssignation(instList)
@@ -130,7 +132,7 @@ local function thirdPassUnRolledAssignation(instList)
 
 ]]
 
-
+	local optimizationCount = 0
 	local i = 1
 	local max = #instList
 
@@ -153,6 +155,7 @@ local function thirdPassUnRolledAssignation(instList)
 
 					instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc1, inc2 }
 					max = max - 5
+					optimizationCount = optimizationCount + 1
 			elseif 	instList[i + 1][1] == MOVE and
 					instList[i + 2][1] == INC and
 					instList[i + 3][1] == MOVE and
@@ -169,6 +172,7 @@ local function thirdPassUnRolledAssignation(instList)
 
 						instList[i] = {UNROLLED_ASSIGNATION, jmp, jmp, inc2, inc1}
 						max = max - 5
+						optimizationCount = optimizationCount + 1
 			end
 
 		end
@@ -176,11 +180,18 @@ local function thirdPassUnRolledAssignation(instList)
 
 		i = i + 1
 	end
+
+	if STATS then print("Unrolled dynamic assignation pass : ", optimizationCount ) end
 end
 
 
 local function secondPassMemset(instList)
-	if type(rawget(_G, "jit")) ~= "table" then return end
+	if type(rawget(_G, "jit")) ~= "table" then
+		if STATS then
+			print("memset() pass is DISABLED because ffi.fill is not available on this platform.")
+		end
+		return
+	end
 	--[[
 	i = i + 1
 	data[i] = 0
@@ -211,6 +222,7 @@ local function secondPassMemset(instList)
 	local max = #instList
 	local currentFindSize = 0
 	local currentAssignation = 0
+	local optimizationCount = 0
 
 	while (i <= max - 2) do
 		if instList[i][1] == MOVE and instList[i][2] == 1 and instList[i + 1][1] == ASSIGNATION then
@@ -261,7 +273,7 @@ local function secondPassMemset(instList)
 						table.insert(instList, i + 1, {MOVE, currentFindSize})
 						i = i + 1
 					end
-
+					optimizationCount = optimizationCount + 1
 					goto doubleBreak
 				else
 					currentFindSize = currentFindSize + 1
@@ -275,6 +287,7 @@ local function secondPassMemset(instList)
 
 		i = i + 1
 	end
+	if STATS then print("memset() pass : ", optimizationCount ) end
 end
 
 local brainfuck = function(s)
@@ -285,7 +298,7 @@ local brainfuck = function(s)
 	local lastInst = s:sub(1, 1)
 	local lastInstType = instructions[lastInst]
 	local arithmeticsCount = 0
-
+	local optimizationCount = 0
 	if (artithmeticsIns[lastInst]) then
 		arithmeticsCount = artithmeticsIns[lastInst]
 	end
@@ -298,6 +311,7 @@ local brainfuck = function(s)
 		--folding
 		if curInstType == lastInstType then
 			if arithmeticValue then
+				optimizationCount = optimizationCount + 1
 				arithmeticsCount = arithmeticsCount + arithmeticValue
 			else
 				table.insert(instList, {instructions[curInst]})
@@ -328,6 +342,7 @@ local brainfuck = function(s)
 		lastInstType = curInstType
 		i = i + 1
 	end
+	if STATS then print("Folding pass : ", optimizationCount ) end
 
 	firstPassOptimization(instList)
 	secondPassMemset(instList)
@@ -378,7 +393,7 @@ end
 	local text = f:read("*a")
 	f:close()
 	local brainfuckFunc = brainfuck(text)
-	--local t = os.clock()
+	local t = os.clock()
 	brainfuckFunc()
-	--print(os.clock() - t)
+	if STATS then print(os.clock() - t) end
 end)(arg)
