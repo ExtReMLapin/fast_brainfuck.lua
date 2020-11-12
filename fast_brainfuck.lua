@@ -1,6 +1,6 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
 if jit then jit.opt.start("loopunroll=100") end
-local STATS = false
+local STATS = false -- set to true to print optimizations count for each pass
 local vmSettings = {
 	ram = 32768,
 	cellType = "char",
@@ -52,7 +52,7 @@ local IRToCode = {
 	[READ] = "data[i]=r()",
 	[ASSIGNATION] = "data[i]=%i ",
 	[MEMSET] = "ffi.fill(data+i+%i, %i, %i)",
-	[UNROLLED_ASSIGNATION] = "if (data[i] ~= 0) then data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 end ", -- slower, not used
+	[UNROLLED_ASSIGNATION] = "if (data[i] ~= 0) then data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i data[i] = 0 end ",
 }
 
 
@@ -73,9 +73,9 @@ local function firstPassOptimization(instList)
 			instList[i + 2][1] == LOOPEND then
 				table.remove(instList, i)
 				table.remove(instList, i)
-				if instList[i+1][1] == INC then
-					instList[i] = {ASSIGNATION, instList[i+1][2]}
-					table.remove(instList, i+1)
+				if instList[i + 1][1] == INC then
+					instList[i] = {ASSIGNATION, instList[i + 1][2]}
+					table.remove(instList, i + 1)
 					max = max - 1
 				else
 					instList[i] = {ASSIGNATION, 0}
