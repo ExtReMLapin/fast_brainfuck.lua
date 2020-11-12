@@ -1,10 +1,5 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
-if jit then jit.opt.start("loopunroll=100") end
 local STATS = false -- set to true to print optimizations count for each pass
-local vmSettings = {
-	ram = 32768,
-	cellType = "char",
-}
 
 local artithmeticsIns = {
 	["+"] = 1,
@@ -37,16 +32,17 @@ local instructions = {
 }
 
 local IRToCode = {
-	[INC] = "data[i]=data[i]+%i ",
-	[MOVE] = "i=i+%i ",
-	[LOOPSTART] = "while data[i]~=0 do ",
-	[END] = "end ",
-	[PRINT] = "w(data[i])",
-	[READ] = "data[i]=r()",
-	[ASSIGNATION] = "data[i]=%i ",
-	[MEMSET] = "ffi.fill(data+i+%i, %i, %i)",
-	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
-	[IFSTART] = "if (data[i] ~= 0) then "
+	[INC] = "(*p) += %i; ",
+	[MOVE] = "p += %i; ",
+	[LOOPSTART] = "while ((*p) != 0) { ",
+	[END] = " } ",
+	[PRINT] = "putchar(*p); ",
+	[READ] = "*p=getchar(); ",
+	[ASSIGNATION] = "(*p)=%i;  ",
+	[MEMSET] = "memset(p+%i, %i, %i); ",
+	--[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
+	[UNROLLED_ASSIGNATION] = "*(p+%i) = *(p+%i) + (-(*p/%i))*%i; ",
+	[IFSTART] = "if ((*p) != 0) {  "
 }
 
 
@@ -277,10 +273,10 @@ local function secondPassMemset(instList)
 					if instList[i - 1][1] == ASSIGNATION and instList[i - 1][2] == currentAssignation then
 						i = i - 1
 						table.remove(instList, i)
-						table.insert(instList, i, {MEMSET, 0, currentFindSize + 1, currentAssignation})
+						table.insert(instList, i, {MEMSET, 0, currentAssignation, currentFindSize + 1})
 						max = max - (currentFindSize + 1) * 2
 					else
-						table.insert(instList, i, {MEMSET, 1, currentFindSize , currentAssignation})
+						table.insert(instList, i, {MEMSET, 1, currentAssignation, currentFindSize })
 						max = max - (currentFindSize * 2 - 1)
 					end
 
@@ -382,34 +378,19 @@ local brainfuck = function(s)
 		i = i + 1
 	end
 
-	local code = [[local data;
-local ffi
-if type(rawget(_G, "jit")) == 'table' then
-	ffi = require("ffi")
-	data = ffi.new("]] .. vmSettings.cellType .. "[" .. vmSettings.ram .. [[]")
-else
-	data = {}
-	local i = 0
-	while i < ]] .. vmSettings.ram .. [[ do
-		data[i] = 0
-		i = i + 1
-	end
-end
-local i = 0
+	local code = [[ 
+#include <stdio.h>
+#include <string.h>
 
-local w = function(c)
-	io.write(string.char(c))
-end
-
-local r = function()
-	return io.read(1):byte()
-end
-
-]] .. table.concat(insTableStr)
-	local loadstring = loadstring or load
-	local status = loadstring(code, string.format("Brainfuck Interpreter %p",instList ))
-	--print(code) do return end
-	return status
+int main()
+{
+	char buf[32000];
+	memset(buf,0,32000);
+	char* p = buf;
+]] .. table.concat(insTableStr) .. [[	return (1);
+}
+]]
+	return code
 end
 
 (function(arg)
@@ -417,7 +398,6 @@ end
 	local text = f:read("*a")
 	f:close()
 	local brainfuckFunc = brainfuck(text)
-	local t = os.clock()
-	brainfuckFunc()
-	if STATS then print("\nTook (in s): " .. os.clock() - t) end
+	print(brainfuckFunc)
+
 end)(arg)
