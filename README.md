@@ -111,6 +111,34 @@ into
   
 3rd pass requires second as assignation is created by second.
 
+
+#### Comparing optimization passes and speed on hanoi.bf
+Benchmarked on Ryzen 3700x on WSL this time
+
+No optimization pass (other than folding) : 2.59s
+
+First optimization pass (assignation) : 0.8125s *high effectiveness*
+
+Second optimization pass (memset) : 0.84375s **❌INEFFECTIVE HERE**
+
+Third optimization pass (dynamic assignation folding) : 0.171875s
+
+
+#### Comparing optimization passes and speed on mandel.bf
+Benchmarked on Ryzen 3700x still on WSL
+
+No optimization pass (other than folding) : 3.5s
+
+First optimization pass (assignation) : 2.92s *low effectiveness*
+
+Second optimization pass (memset) : 2.54s **✔️EFFECTIVE HERE**
+
+Third optimization pass (dynamic assignation folding) : 2.01s
+
+
+
+
+
 #### CMP of the optimization passes.
 Left part is 1st pass only, right is all 4.
 
