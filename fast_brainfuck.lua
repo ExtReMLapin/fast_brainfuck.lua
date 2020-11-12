@@ -3,7 +3,7 @@ if jit then jit.opt.start("loopunroll=100") end
 local STATS = true -- set to true to print optimizations count for each pass
 local vmSettings = {
 	ram = 32768,
-	cellType = "char",
+	cellType = "int",
 }
 
 local ffi
