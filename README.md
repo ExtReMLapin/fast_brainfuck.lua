@@ -2,7 +2,7 @@
 High performance brainfuck transpiler/interpreter for Lua with FFI support
 
 
-### Benchmark
+### Benchmark on mandelbrot.bf
 
 Tested on Ryzen 3700x | 32gb ram 2400mhz
 
