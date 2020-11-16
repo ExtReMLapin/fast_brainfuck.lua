@@ -1,6 +1,6 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
 if jit then jit.opt.start("loopunroll=100") end
-local STATS = true -- set to true to print optimizations count for each pass
+local STATS = false -- set to true to print optimizations count for each pass
 local vmSettings = {
 	ram = 32768,
 	cellType = "char",
@@ -71,41 +71,53 @@ local function nextNonNestingWhileLoop(IRList, curPos, maxPos)
 	local loopStart
 
 	while (curPos <= maxPos) do
-		--print("nextNonNestingWhileLoop", curPos, maxPos)
-		if IRList[curPos][1] == LOOPSTART then
-			loopStart = curPos
-			local i = 1 -- 1 because we directly check the next instruction
 
-			while (loopStart + i <= maxPos) do
-				local curIR = IRList[loopStart + i][1]
+		loopStart = curPos
+		local i = 0
+		local whileDepth = 0
+		local ifDepth = 0
+		while (loopStart + i <= maxPos) do
+			local curIR = IRList[loopStart + i][1]
+			if curIR == LOOPSTART then
+				whileDepth = whileDepth + 1
+			elseif curIR == LOOPEND then
+				whileDepth = whileDepth - 1
+			elseif curIR == IFSTART then
+				ifDepth = ifDepth + 1
+			elseif curIR == IFEND then
+				ifDepth = ifDepth - 1
+			end
 
-				if curIR == LOOPSTART then
-					i = i - 1 -- -1 because we need to analyze it in the next outter Loop iteration
-					break;
-				elseif curIR == LOOPEND then
-					local loopEnd = loopStart + i
-					local IRListOUTPUT = {}
-					while loopStart <= loopEnd do
-						table.insert(IRListOUTPUT, IRList[loopStart])
-						loopStart = loopStart + 1
+			if whileDepth == -1 or ifDepth == -1 then
+				-- inc inc end
+				-- i = 2
+				--loopstart = 5
+				--loopend = 6
+					local loopEnd = loopStart + i - 1
+					if loopEnd > loopStart then
+						local IRListOUTPUT = {}
+						while loopStart <= loopEnd do
+							table.insert(IRListOUTPUT, IRList[loopStart])
+							loopStart = loopStart + 1
+						end
+
+						return loopStart, IRListOUTPUT
+					else
+						break
 					end
-				
-					return loopStart, IRListOUTPUT
-				end
-
-				i = i + 1
 			end
 
 
-
+			i = i + 1
 		end
+		
 
 		curPos = curPos + 1
 	end
-
 	return nil, nil
 end
 
+--cmp if two IR are equal, check IR and operands
 local function IREqual(IR1, IR2)
 	if IR1[1] ~= IR2[1] then return false end
 	local i = 1
@@ -117,6 +129,7 @@ local function IREqual(IR1, IR2)
 	return true
 end
 
+-- very short unit test
 assert(IREqual({INC, 1, 2, 3}, {INC, 1, 2, 3}) == true)
 assert(IREqual({INC, 1, 2}, {INC, 1, 2, 3}) == false)
 assert(IREqual({INC, 1, 2, 3}, {INC, 1, 2}) == false)
@@ -157,6 +170,7 @@ local function replaceIRs(haystack, needle, replaceBy, startPos)
 	local replacmentSize = #replaceBy
 
 	while (i <= max) do
+
 		local needleI = 0
 
 		while (needleI < needlesize and (i + needleI) <= max and IREqual(haystack[i + needleI], needle[needleI + 1])) do
@@ -164,10 +178,10 @@ local function replaceIRs(haystack, needle, replaceBy, startPos)
 		end
 
 		if needleI == needlesize then
-			local replaceByI = 1
+			local replaceByI = 0
 
 			--remove needle IR
-			while (replaceByI <= needlesize) do
+			while (replaceByI < needlesize) do
 				table.remove(haystack, i)
 				replaceByI = replaceByI + 1
 			end
@@ -555,6 +569,7 @@ end
 			local max = #instList
 			local optReplaceCount = 0
 			while (i <= max) do
+				--print("shouldCreateSubFunctions", i)
 				local startPos, patternIRList = nextNonNestingWhileLoop(instList, i, max)
 				if startPos ~= nil then
 					local matches = findIRMatches(instList, patternIRList, startPos)
@@ -564,11 +579,13 @@ end
 					if matches >= subFunctionMinimumMatches then
 						subFunctions[funcName] = patternIRList
 						local replaceCount = replaceIRs(instList, patternIRList, {{FUNC_CALL, funcName}}, startPos)
-						assert(replaceCount == matches, "expected : " .. matches .. " got : " .. replaceCount)
+						--assert(replaceCount == matches, "Match & replace -> expected : " .. matches .. " matches got : " .. replaceCount .. " replacments")
 						optReplaceCount = optReplaceCount + replaceCount
 						max = max - ((replaceCount-1) * #patternIRList)
+						i = startPos + #patternIRList + 1
+					else
+						i = i + 1
 					end
-					i = startPos + #patternIRList + 1
 				else
 					break
 				end
@@ -591,7 +608,7 @@ end
 			table.insert(subFunctionsNames, k)
 		end
 
-		code = code .. "local " .. table.concat(subFunctionsNames, ", ") .. ";"
+		code = code .. "local " .. table.concat(subFunctionsNames, ", ") .. ";\n\n"
 
 		for fName, IRtbl in pairs(subFunctions) do
 			local subFIR = {}
@@ -602,9 +619,9 @@ end
 				subFIR[i2] = string.format(IRToCode[IR[1]], select(2, unpack(IR))):gsub("%+%-", "-")
 				i2 = i2 + 1
 			end
-			table.insert(subFunctionTableString, string.format(" %s = function() %s end ", fName, table.concat(subFIR)))
+			table.insert(subFunctionTableString, string.format("%s = function() %s end ", fName, table.concat(subFIR)))
 		end
-		code = code .. table.concat(subFunctionTableString, "\n")
+		code = code .. table.concat(subFunctionTableString, "\n") .. "\n"
 
 	end
 
@@ -620,8 +637,9 @@ end
 	code = code .. table.concat(insTableStr, "\n")
 	local loadstring = loadstring or load
 	--print(loadstring(code, string.format("Brainfuck Interpreter %p",instList )))
-	local status = loadstring(code, string.format("Brainfuck Interpreter %p",instList ))
-	--print(code) do return end
+	local status, error = loadstring(code, string.format("Brainfuck Interpreter %p",instList ))
+	if not status then print("--Could not compile to Lua, error : \n--", error) status = function() end end
+	--print(code)
 	return status
 end
 
