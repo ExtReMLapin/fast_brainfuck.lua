@@ -17,12 +17,14 @@ local INC = 1
 local MOVE = 2
 local PRINT = 3
 local LOOPSTART = 4
-local END = 5
+local LOOPEND = 5
 local READ = 6
 local ASSIGNATION = 7
 local MEMSET = 8
 local UNROLLED_ASSIGNATION = 9
 local IFSTART = 10
+local IFEND = 11
+local FUNC_CALL = 12
 
 
 local instructions = {
@@ -31,7 +33,7 @@ local instructions = {
 	[">"] = MOVE,
 	["<"] = MOVE,
 	["["] = LOOPSTART,
-	["]"] = END,
+	["]"] = LOOPEND,
 	["."] = PRINT,
 	[","] = READ
 }
@@ -40,13 +42,15 @@ local IRToCode = {
 	[INC] = "data[i]=data[i]+%i ",
 	[MOVE] = "i=i+%i ",
 	[LOOPSTART] = "while data[i]~=0 do ",
-	[END] = "end ",
+	[LOOPEND] = "end ",
 	[PRINT] = "w(data[i])",
 	[READ] = "data[i]=r()",
 	[ASSIGNATION] = "data[i]=%i ",
 	[MEMSET] = "ffi.fill(data+i+%i, %i, %i)",
 	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
-	[IFSTART] = "if (data[i] ~= 0) then "
+	[IFSTART] = "if (data[i] ~= 0) then ",
+	[IFEND] = "end ",
+	[FUNC_CALL] = "%s()"
 }
 
 
@@ -64,7 +68,7 @@ local function firstPassOptimization(instList)
 	while (i <= max - 3) do
 		if 	instList[i][1] == LOOPSTART and
 			instList[i + 1][1] == INC and
-			instList[i + 2][1] == END then -- checks for the ins pattern, ignoring the content of the loop beside if it's inc or not
+			instList[i + 2][1] == LOOPEND then -- checks for the ins pattern, ignoring the content of the loop beside if it's inc or not
 				table.remove(instList, i)
 				table.remove(instList, i)
 				if instList[i + 1][1] == INC then -- merge with next ins if possible
@@ -144,7 +148,7 @@ local function thirdPassUnRolledAssignation(instList)
 			local relativePosition = 0
 
 			local assignationTable = {}
-			while (instList[loopEnd][1] ~= END) do
+			while (instList[loopEnd][1] ~= LOOPEND) do
 				if loopEnd == max then return end
 
 				local curIns = instList[loopEnd][1]
@@ -189,7 +193,7 @@ local function thirdPassUnRolledAssignation(instList)
 
 			-- not assignationCount + 1 as there is already an offset of 1 reserved for 0 assignation of calculated from the loop definition itself
 			table.insert(instList, loopStart + assignationCount, {ASSIGNATION, 0})
-			table.insert(instList, loopStart + assignationCount + 1, {END})
+			table.insert(instList, loopStart + assignationCount + 1, {IFEND})
 			max = max + assignationCount + 2 -- +2 because of IFSTART instruction at the start
 			optimizationCount = optimizationCount + assignationCount
 
