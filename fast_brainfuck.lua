@@ -1,15 +1,16 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
 if jit then jit.opt.start("loopunroll=100") end
-local STATS = false -- set to true to print optimizations count for each pass
+local STATS = true -- set to true to print optimizations count for each pass
 local vmSettings = {
 	ram = 32768,
 	cellType = "char",
 }
 
 
+local autoDetectSubfunctionDispatching = true -- will "guess" number of instruction and if needed enable subfunction dispatching
 local shouldCreateSubFunctions = false -- only use for HUGE programs because it slows down the code
-local subFunctionMinimumSize = 100
-local subFunctionMaxSize = 2^12 -- not good at all, we should actually count the number of instructions, not just do this
+local subFunctionMinimumSize = 1000
+local subFunctionMaxSize = 2^16-1
 local subFunctionPrefix = "loop_"
 
 
@@ -63,6 +64,38 @@ local IRToCode = {
 	[FUNC_CALL] = "%s() "
 }
 
+--weight in LuaJIT bc of each IR in subfunction context
+local IRWeightUpValue = {
+	[INC] = 7,
+	[MOVE] = 3,
+	[LOOPSTART] = 7,
+	[LOOPEND] = 0,
+	[PRINT] = 5,
+	[READ] = 5,
+	[ASSIGNATION] = 4,
+	[MEMSET] = 9,
+	[UNROLLED_ASSIGNATION] = 15,
+	[IFSTART] = 5,
+	[IFEND] = 0,
+	[FUNC_CALL] = 2
+}
+
+--weight in LuaJIT bc of each IR in main code context
+local IRWeightLocalValue = {
+	[INC] = 3,
+	[MOVE] = 1,
+	[LOOPSTART] = 5,
+	[LOOPEND] = 0,
+	[PRINT] = 3,
+	[READ] = 3,
+	[ASSIGNATION] = 2,
+	[MEMSET] = 6,
+	[UNROLLED_ASSIGNATION] = 9,
+	[IFSTART] = 3,
+	[IFEND] = 0,
+	[FUNC_CALL] = 2
+}
+
 --used for debugging
 local eng = {
 	[INC] = "INC",
@@ -80,18 +113,30 @@ local eng = {
 }
 
 
+local function countIRInsWeight(IRList)
+	local c = 0
+	local i = 1
+	local max = #IRList
+	while (i <= max) do
+		c = c + IRWeightLocalValue[IRList[i][1]]
+		i = i + 1
+	end
+	return c
+end
+
 -- find the next good candidate of loop that can be extracted of the main code, size between subFunctionMinimumSize and subFunctionMaxSize
 local function nextCandidateWhileLoop(IRList, curPos, maxPos)
-	local loopStart
 
 	while (curPos <= maxPos) do
 		local checkPoint = -1
 		local shouldStopSearching = false
+		local curWeight = 0
 
-		loopStart = curPos
+		local loopStart = curPos
 		local i = 0
 		local whileDepth = 0
 		local ifDepth = 0
+
 		while (loopStart + i <= maxPos) do
 			local curIR = IRList[loopStart + i][1]
 			if curIR == LOOPSTART then
@@ -103,18 +148,22 @@ local function nextCandidateWhileLoop(IRList, curPos, maxPos)
 			elseif curIR == IFEND then
 				ifDepth = ifDepth - 1
 			end
+			curWeight = curWeight + IRWeightUpValue[curIR]
 
-			if whileDepth == 0 and ifDepth == 0 and i > subFunctionMinimumSize then
-				if i <= subFunctionMaxSize then
+			if whileDepth == 0 and ifDepth == 0 and curWeight > subFunctionMinimumSize then
+				if curWeight <= subFunctionMaxSize then
 					checkPoint = i
 				else
 					shouldStopSearching = true
 				end
+				if (loopStart + i == maxPos) then
+					shouldStopSearching = true
+				end
+
 			end
 
 			-- we cannot keep searching as we exited the current loop/if depth
 			if whileDepth == -1 or ifDepth == -1 or shouldStopSearching == true then
-					if checkPoint == -1 then break end
 					local loopEnd = loopStart + checkPoint
 					if loopEnd > loopStart then
 						local _loopStartBK = loopStart;
@@ -123,6 +172,7 @@ local function nextCandidateWhileLoop(IRList, curPos, maxPos)
 							table.insert(IRListOUTPUT, IRList[loopStart])
 							loopStart = loopStart + 1
 						end
+
 						return _loopStartBK, IRListOUTPUT
 					else
 						break
@@ -132,6 +182,8 @@ local function nextCandidateWhileLoop(IRList, curPos, maxPos)
 
 			i = i + 1
 		end
+
+
 
 		curPos = curPos + 1
 	end
@@ -466,6 +518,7 @@ end
 
 
 local brainfuck = function(s)
+
 	s = s:gsub("[^%+%-<>%.,%[%]]+", "") -- remove new lines
 	local instList = {}
 	local slen = #s
@@ -522,6 +575,11 @@ local brainfuck = function(s)
 	firstPassOptimization(instList)
 	secondPassMemset(instList)
 	thirdPassUnRolledAssignation(instList)
+
+	if autoDetectSubfunctionDispatching and type(jit) == "table" and  countIRInsWeight(instList) > subFunctionMaxSize then
+		shouldCreateSubFunctions = true
+	end
+
 	local insTableStr = {}
 
 
@@ -554,18 +612,18 @@ end
 
 ]]
 	if shouldCreateSubFunctions then
-
-		--remove the IR from main code
-		do
-			-- let's save the latest good candidate that could close/end the extraction chunk
-
+		--luajit only
+		local optReplaceCount = 0
+		local jit_util = require("jit.util")
+		local loadstring = loadstring or load
+		local headerBCSize = jit_util.funcinfo(loadstring(code)).bytecodes
+		-- while [CANNOT COMPILE]
+		while countIRInsWeight(instList) > subFunctionMaxSize-headerBCSize do
 
 			local i = 1
-			local max = #instList
-			local optReplaceCount = 0
+			local max = #instList	
 			while (i <= max) do
 				local startPos, patternIRList = nextCandidateWhileLoop(instList, i, max)
-				assert(IREqual(instList[startPos], patternIRList[1]))
 				if startPos ~= nil then
 					local funcName = subFunctionPrefix .. tostring(patternIRList):sub(8)
 					subFunctions[funcName] = patternIRList
@@ -579,9 +637,12 @@ end
 					break
 				end
 			end
-			if STATS then print("--Refactoring pass : ", optReplaceCount) end
-		end
 
+			if optReplaceCount == 0 then
+				error("no code to extract from main()")
+			end	
+		end
+		if STATS then print("--Refactoring pass : ", optReplaceCount) end
 
 
 
@@ -592,8 +653,9 @@ end
 		for k, v in pairs(subFunctions) do
 			table.insert(subFunctionsNames, k)
 		end
-
-		code = code .. "local " .. table.concat(subFunctionsNames, ", ") .. ";\n\n"
+		if next(subFunctionsNames) then
+			code = code .. "local " .. table.concat(subFunctionsNames, ", ") .. ";\n\n"
+		end
 
 		for fName, IRtbl in pairs(subFunctions) do
 			local subFIR = {}
