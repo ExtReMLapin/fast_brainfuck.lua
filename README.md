@@ -2,6 +2,16 @@
 High performance brainfuck transpiler/interpreter for Lua with FFI support
 
 
+⚠️ I strongly advise you to use it with LuaJIT ⚠️
+
+### Usage
+
+`luajit fast_brainfuck.lua program.bf`
+
+`luajit fast_brainfuck.lua program.bf output.lua`
+
+----------
+
 ### Benchmark on mandelbrot.bf
 
 Tested on Ryzen 3700x | 32gb ram 2400mhz
