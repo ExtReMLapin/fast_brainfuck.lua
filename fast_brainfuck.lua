@@ -697,10 +697,28 @@ end
 end
 
 (function(arg)
-	local f = io.open(arg[1] or "mandel.b")
+	if #arg == 0 then
+		print("usage : fast_brainfuck.lua brainfuckFile.b [optionnal output.lua]")
+
+		return
+	end
+
+	local f = io.open(arg[1])
 	local text = f:read("*a")
 	f:close()
+
 	local code = brainfuck(text)
+
+	if arg[2] then
+		local f = io.open(arg[2], "w")
+		assert(f, "Could not write to " .. arg[2])
+		f:write(code)
+		f:close()
+		print("Wrote code to " .. arg[2])
+
+		return
+	end
+
 	local loadstring = loadstring or load
 	local brainfuckFunc, error = loadstring(code, string.format("Brainfuck Interpreter %p", code))
 
@@ -715,5 +733,4 @@ end
 			print("\n--Took (in s): " .. os.clock() - t)
 		end
 	end
-
 end)(arg)
