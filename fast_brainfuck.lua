@@ -8,8 +8,9 @@ local vmSettings = {
 
 
 local shouldCreateSubFunctions = false -- only use for HUGE programs because it slows down the code
-local subFunctionMinimumMatches = 50
-local subFunctionPrefix = "lf_"
+local subFunctionMinimumSize = 100
+local subFunctionMaxSize = 2^12 -- not good at all, we should actually count the number of instructions, not just do this
+local subFunctionPrefix = "loop_"
 
 
 local subFunctions = {}
@@ -62,15 +63,30 @@ local IRToCode = {
 	[FUNC_CALL] = "%s() "
 }
 
+--used for debugging
+local eng = {
+	[INC] = "INC",
+	[MOVE] = "MOVE",
+	[PRINT] = "PRINT",
+	[LOOPSTART] = "LOOPSTART",
+	[LOOPEND] = "LOOPEND",
+	[READ] = "READ",
+	[ASSIGNATION] = "ASSIGNATION",
+	[MEMSET] = "MEMSET",
+	[UNROLLED_ASSIGNATION] = "UNROLLED_ASSIGNATION",
+	[IFSTART] = "IFSTART",
+	[IFEND] = "IFEND",
+	[FUNC_CALL] = "FUNC_CALL",
+}
 
 
-
-
--- it's low likely we find duplicable nested loops se we only search for single ones
-local function nextNonNestingWhileLoop(IRList, curPos, maxPos)
+-- find the next good candidate of loop that can be extracted of the main code, size between subFunctionMinimumSize and subFunctionMaxSize
+local function nextCandidateWhileLoop(IRList, curPos, maxPos)
 	local loopStart
 
 	while (curPos <= maxPos) do
+		local checkPoint = -1
+		local shouldStopSearching = false
 
 		loopStart = curPos
 		local i = 0
@@ -88,20 +104,26 @@ local function nextNonNestingWhileLoop(IRList, curPos, maxPos)
 				ifDepth = ifDepth - 1
 			end
 
-			if whileDepth == -1 or ifDepth == -1 then
-				-- inc inc end
-				-- i = 2
-				--loopstart = 5
-				--loopend = 6
-					local loopEnd = loopStart + i - 1
+			if whileDepth == 0 and ifDepth == 0 and i > subFunctionMinimumSize then
+				if i <= subFunctionMaxSize then
+					checkPoint = i
+				else
+					shouldStopSearching = true
+				end
+			end
+
+			-- we cannot keep searching as we exited the current loop/if depth
+			if whileDepth == -1 or ifDepth == -1 or shouldStopSearching == true then
+					if checkPoint == -1 then break end
+					local loopEnd = loopStart + checkPoint
 					if loopEnd > loopStart then
+						local _loopStartBK = loopStart;
 						local IRListOUTPUT = {}
 						while loopStart <= loopEnd do
 							table.insert(IRListOUTPUT, IRList[loopStart])
 							loopStart = loopStart + 1
 						end
-
-						return loopStart, IRListOUTPUT
+						return _loopStartBK, IRListOUTPUT
 					else
 						break
 					end
@@ -110,7 +132,6 @@ local function nextNonNestingWhileLoop(IRList, curPos, maxPos)
 
 			i = i + 1
 		end
-		
 
 		curPos = curPos + 1
 	end
@@ -137,31 +158,6 @@ assert(IREqual({INC, 1, 2, 3}, {INC, 1, 2, 4}) == false)
 assert(IREqual({INC, 1, 2, 3}, {MOVE, 1, 2, 4}) == false)
 assert(IREqual({INC}, {INC}) == true)
 
-local function findIRMatches(haystack, needle, startPos)
-	local foundCount = 0
-	local i = startPos
-	local max = #haystack
-	local needlesize = #needle
-
-	while (i <= max) do
-		local needleI = 0
-
-		while (needleI < needlesize and (i + needleI) <= max and IREqual(haystack[i + needleI - 1], needle[needleI + 1])) == true do
-			needleI = needleI + 1
-		end
-
-		if needleI == needlesize then
-			i = i + needlesize
-			foundCount = foundCount + 1
-		else
-			i = i + 1
-		end
-	end
-
-	return foundCount
-end
-
-
 local function replaceIRs(haystack, needle, replaceBy, startPos)
 	local replacmentCount = 0
 	local i = startPos
@@ -170,7 +166,6 @@ local function replaceIRs(haystack, needle, replaceBy, startPos)
 	local replacmentSize = #replaceBy
 
 	while (i <= max) do
-
 		local needleI = 0
 
 		while (needleI < needlesize and (i + needleI) <= max and IREqual(haystack[i + needleI], needle[needleI + 1])) do
@@ -241,14 +236,14 @@ local function firstPassOptimization(instList)
 
 		i = i + 1
 	end
-	if STATS then print("Assignation pass : ", optimizationCount ) end
+	if STATS then print("--Assignation pass : ", optimizationCount ) end
 end
 
 
 local function secondPassMemset(instList)
 	if type(rawget(_G, "jit")) ~= "table" then
 		if STATS then
-			print("memset() pass is DISABLED because ffi.fill is not available on this platform.")
+			print("--memset() pass is DISABLED because ffi.fill is not available on this platform.")
 		end
 		return
 	end
@@ -347,7 +342,7 @@ local function secondPassMemset(instList)
 
 		i = i + 1
 	end
-	if STATS then print("memset() pass : ", optimizationCount ) end
+	if STATS then print("--memset() pass : ", optimizationCount ) end
 end
 
 local function thirdPassUnRolledAssignation(instList)
@@ -465,7 +460,7 @@ local function thirdPassUnRolledAssignation(instList)
 	end
 
 	if STATS then
-		print("Unrolled dynamic assignation pass : ", optimizationCount)
+		print("--Unrolled dynamic assignation pass : ", optimizationCount)
 	end
 end
 
@@ -522,7 +517,7 @@ local brainfuck = function(s)
 		lastInstType = curInstType
 		i = i + 1
 	end
-	if STATS then print("Folding pass : ", optimizationCount ) end
+	if STATS then print("--Folding pass : ", optimizationCount ) end
 
 	firstPassOptimization(instList)
 	secondPassMemset(instList)
@@ -569,33 +564,23 @@ end
 			local max = #instList
 			local optReplaceCount = 0
 			while (i <= max) do
-				--print("shouldCreateSubFunctions", i)
-				local startPos, patternIRList = nextNonNestingWhileLoop(instList, i, max)
+				local startPos, patternIRList = nextCandidateWhileLoop(instList, i, max)
+				assert(IREqual(instList[startPos], patternIRList[1]))
 				if startPos ~= nil then
-					local matches = findIRMatches(instList, patternIRList, startPos)
-
 					local funcName = subFunctionPrefix .. tostring(patternIRList):sub(8)
-					
-					if matches >= subFunctionMinimumMatches then
-						subFunctions[funcName] = patternIRList
-						local replaceCount = replaceIRs(instList, patternIRList, {{FUNC_CALL, funcName}}, startPos)
-						--assert(replaceCount == matches, "Match & replace -> expected : " .. matches .. " matches got : " .. replaceCount .. " replacments")
-						optReplaceCount = optReplaceCount + replaceCount
-						max = max - ((replaceCount-1) * #patternIRList)
-						i = startPos + #patternIRList + 1
-					else
-						i = i + 1
-					end
+					subFunctions[funcName] = patternIRList
+					local replaceCount = replaceIRs(instList, patternIRList, {{FUNC_CALL, funcName}}, startPos)
+
+					optReplaceCount = optReplaceCount + replaceCount
+					max = max - ((replaceCount) * #patternIRList) + 1
+					i = startPos + #patternIRList + 1
+
 				else
 					break
 				end
 			end
-			if STATS then print("Refactoring pass : ", optReplaceCount) end
+			if STATS then print("--Refactoring pass : ", optReplaceCount) end
 		end
-
-
-
-
 
 
 
@@ -619,7 +604,7 @@ end
 				subFIR[i2] = string.format(IRToCode[IR[1]], select(2, unpack(IR))):gsub("%+%-", "-")
 				i2 = i2 + 1
 			end
-			table.insert(subFunctionTableString, string.format("%s = function() %s end ", fName, table.concat(subFIR)))
+			table.insert(subFunctionTableString, string.format("%s = function() %s end ", fName, table.concat(subFIR, "\n")))
 		end
 		code = code .. table.concat(subFunctionTableString, "\n") .. "\n"
 
@@ -635,20 +620,28 @@ end
 	end
 
 	code = code .. table.concat(insTableStr, "\n")
-	local loadstring = loadstring or load
-	--print(loadstring(code, string.format("Brainfuck Interpreter %p",instList )))
-	local status, error = loadstring(code, string.format("Brainfuck Interpreter %p",instList ))
-	if not status then print("--Could not compile to Lua, error : \n--", error) status = function() end end
-	--print(code)
-	return status
+
+	return code
 end
 
 (function(arg)
 	local f = io.open(arg[1] or "mandel.b")
 	local text = f:read("*a")
 	f:close()
-	local brainfuckFunc = brainfuck(text)
-	local t = os.clock()
-	brainfuckFunc()
-	if STATS then print("\nTook (in s): " .. os.clock() - t) end
+	local code = brainfuck(text)
+	local loadstring = loadstring or load
+	local brainfuckFunc, error = loadstring(code, string.format("Brainfuck Interpreter %p", code))
+
+	if not brainfuckFunc then
+		print("--Could not compile to Lua, error : \n--", error)
+		print(code)
+	else
+		local t = os.clock()
+		brainfuckFunc()
+
+		if STATS then
+			print("\n--Took (in s): " .. os.clock() - t)
+		end
+	end
+
 end)(arg)
