@@ -1,6 +1,6 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
 if jit then jit.opt.start("loopunroll=100") end
-local STATS = false -- set to true to print optimizations count for each pass
+local STATS = true -- set to true to print optimizations count for each pass
 local vmSettings = {
 	ram = 32768,
 	cellType = "char",
@@ -64,6 +64,7 @@ local IRToCode = {
 	[FUNC_CALL] = "%s() "
 }
 
+
 --weight in LuaJIT bc of each IR in subfunction context
 local IRWeightUpValue = {
 	[INC] = 7,
@@ -112,6 +113,22 @@ local eng = {
 	[FUNC_CALL] = "FUNC_CALL",
 }
 
+
+-- number of operands
+local IRSize = {
+	[INC] = 1,
+	[MOVE] = 1,
+	[LOOPSTART] = 0,
+	[LOOPEND] = 0,
+	[PRINT] = 0,
+	[READ] = 0,
+	[ASSIGNATION] = 1,
+	[MEMSET] = 3,
+	[UNROLLED_ASSIGNATION] = 4,
+	[IFSTART] = 0,
+	[IFEND] = 0,
+	[FUNC_CALL] = 1
+}
 
 local function countIRInsWeight(IRList)
 	local c = 0
@@ -194,21 +211,14 @@ end
 local function IREqual(IR1, IR2)
 	if IR1[1] ~= IR2[1] then return false end
 	local i = 1
-	while (true) do
+	while (i <= IRSize[IR1[1]] ) do
 		if IR1[i] ~= IR2[i] then return false end
-		if IR1[i] == nil then return true end
 		i = i + 1
 	end
 	return true
 end
 
 -- very short unit test
-assert(IREqual({INC, 1, 2, 3}, {INC, 1, 2, 3}) == true)
-assert(IREqual({INC, 1, 2}, {INC, 1, 2, 3}) == false)
-assert(IREqual({INC, 1, 2, 3}, {INC, 1, 2}) == false)
-assert(IREqual({INC, 1, 2, 3}, {INC, 1, 2, 4}) == false)
-assert(IREqual({INC, 1, 2, 3}, {MOVE, 1, 2, 4}) == false)
-assert(IREqual({INC}, {INC}) == true)
 
 local function replaceIRs(haystack, needle, replaceBy, startPos)
 	local replacmentCount = 0
@@ -483,7 +493,7 @@ local function thirdPassUnRolledAssignation(instList)
 				goto URA_UnexpectedInstruction
 			end
 
-			assert(assignationTable[0] ~= nil, "Expected base pointer in loop")
+			--assert(assignationTable[0] ~= nil, "Expected base pointer in loop")
 
 			max = max - (loopEnd - loopStart) - 1
 			while (loopEnd >= loopStart) do
@@ -523,11 +533,10 @@ local function thirdPassUnRolledAssignation(instList)
 	end
 end
 
-
 local brainfuck = function(s)
+	local compilationT = os.clock()
 
 	s = s:gsub("[^%+%-<>%.,%[%]]+", "") -- remove new lines
-
 	local instList = {}
 	local slen = #s
 	local i = 2 -- 2 because 1st may be checked before loop
@@ -535,6 +544,7 @@ local brainfuck = function(s)
 	local lastInstType = instructions[lastInst]
 	local arithmeticsCount = 0
 	local optimizationCount = 0
+
 	if (artithmeticsIns[lastInst]) then
 		arithmeticsCount = artithmeticsIns[lastInst]
 	else
@@ -546,6 +556,7 @@ local brainfuck = function(s)
 		local curInstType = instructions[curInst]
 		--arithmetic instructions are the ones moving pointer or changing pointer value
 		local arithmeticValue = artithmeticsIns[curInst]
+
 		--folding
 		if curInstType == lastInstType then
 			if arithmeticValue then
@@ -564,6 +575,7 @@ local brainfuck = function(s)
 					arithmeticsCount = arithmeticValue
 				else
 					table.insert(instList, {instructions[curInst]})
+
 					arithmeticsCount = 0
 				end
 			else
@@ -571,6 +583,7 @@ local brainfuck = function(s)
 					arithmeticsCount = arithmeticValue
 				else
 					table.insert(instList, {instructions[curInst]})
+
 					arithmeticsCount = 0
 				end
 			end
@@ -580,23 +593,22 @@ local brainfuck = function(s)
 		lastInstType = curInstType
 		i = i + 1
 	end
-	if STATS then print("--Folding pass : ", optimizationCount ) end
+
+	if STATS then
+		print("--Folding pass : ", optimizationCount)
+	end
 
 	firstPassOptimization(instList)
 	secondPassMemset(instList)
 	thirdPassUnRolledAssignation(instList)
 
-	if autoDetectSubfunctionDispatching and type(jit) == "table" and  countIRInsWeight(instList) > subFunctionMaxSize then
+	if autoDetectSubfunctionDispatching and type(jit) == "table" and countIRInsWeight(instList) > subFunctionMaxSize then
 		shouldCreateSubFunctions = true
 	end
 
 	local insTableStr = {}
-
-
 	-- lua 54 & jit compatiblity
 	local unpack = unpack or table.unpack
-
-
 	local code = [[local data;
 local ffi
 if type(rawget(_G, "jit")) == 'table' then
@@ -621,28 +633,33 @@ local r = function()
 end
 
 ]]
+
 	if shouldCreateSubFunctions then
 		--luajit only
 		local optReplaceCount = 0
 		local jit_util = require("jit.util")
 		local loadstring = loadstring or load
 		local headerBCSize = jit_util.funcinfo(loadstring(code)).bytecodes
-		-- while [CANNOT COMPILE]
-		while countIRInsWeight(instList) > subFunctionMaxSize-headerBCSize do
 
+		-- while [CANNOT COMPILE]
+		while countIRInsWeight(instList) > subFunctionMaxSize - headerBCSize do
 			local i = 1
 			local max = #instList
+
 			while (i <= max) do
 				local startPos, patternIRList = nextCandidateWhileLoop(instList, i, max)
+
 				if startPos ~= nil then
 					local funcName = subFunctionPrefix .. tostring(patternIRList):sub(8)
 					subFunctions[funcName] = patternIRList
-					local replaceCount = replaceIRs(instList, patternIRList, {{FUNC_CALL, funcName}}, startPos)
+
+					local replaceCount = replaceIRs(instList, patternIRList, {
+						{FUNC_CALL, funcName}
+					}, startPos)
 
 					optReplaceCount = optReplaceCount + replaceCount
 					max = max - ((replaceCount) * #patternIRList) + 1
 					i = startPos + #patternIRList + 1
-
 				else
 					break
 				end
@@ -650,20 +667,22 @@ end
 
 			if optReplaceCount == 0 then
 				error("no code to extract from main()")
-			end	
+			end
 		end
-		if STATS then print("--Refactoring pass : ", optReplaceCount) end
 
-
+		if STATS then
+			print("--Refactoring pass : ", optReplaceCount)
+		end
 
 		--output the extracted IR to Lua code
 		local subFunctionTableString = {}
-
 		local subFunctionsNames = {}
+
 		for k, v in pairs(subFunctions) do
 			table.insert(subFunctionsNames, k)
 		end
-		if next(subFunctionsNames) then
+
+		if #subFunctionsNames > 0 then
 			code = code .. "local " .. table.concat(subFunctionsNames, ", ") .. ";\n\n"
 		end
 
@@ -671,20 +690,22 @@ end
 			local subFIR = {}
 			local i2 = 1
 			local max = #IRtbl
+
 			while (i2 <= max) do
 				local IR = IRtbl[i2]
 				subFIR[i2] = string.format(IRToCode[IR[1]], select(2, unpack(IR))):gsub("%+%-", "-")
 				i2 = i2 + 1
 			end
+
 			table.insert(subFunctionTableString, string.format("%s = function() %s end ", fName, table.concat(subFIR, "\n")))
 		end
+
 		code = code .. table.concat(subFunctionTableString, "\n") .. "\n"
-
 	end
-
 
 	i = 1
 	local max = #instList
+
 	while (i <= max) do
 		local IR = instList[i]
 		insTableStr[i] = string.format(IRToCode[IR[1]], select(2, unpack(IR))):gsub("%+%-", "-")
@@ -692,7 +713,7 @@ end
 	end
 
 	code = code .. table.concat(insTableStr, "\n")
-
+	if STATS then print("Compilation time took :", os.clock()-compilationT) end
 	return code
 end
 
@@ -706,7 +727,6 @@ end
 	local f = io.open(arg[1])
 	local text = f:read("*a")
 	f:close()
-
 	local code = brainfuck(text)
 
 	if arg[2] then
@@ -730,7 +750,7 @@ end
 		brainfuckFunc()
 
 		if STATS then
-			print("\n--Took (in s): " .. os.clock() - t)
+			print("\n--Running took (in s): " .. os.clock() - t)
 		end
 	end
 end)(arg)
