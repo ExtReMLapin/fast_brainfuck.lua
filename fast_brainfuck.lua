@@ -1,6 +1,6 @@
 --usage : luajit fast_brainfuck.lua mandelbrot.bf
 if jit then jit.opt.start("loopunroll=100") end
-local STATS = true -- set to true to print optimizations count for each pass
+local STATS = false -- set to true to print optimizations count for each pass
 local vmSettings = {
 	ram = 32768,
 	cellType = "char",
@@ -448,6 +448,13 @@ local function thirdPassUnRolledAssignation(instList)
 			local loopStart = i
 			local loopEnd = i + 1
 			if not instList[loopEnd] then return end
+			if instList[loopEnd][1] == LOOPEND then --dead code `[]`
+				table.remove(instList, i)
+				table.remove(instList, i)
+				max = max - 2
+				i = i - 1 -- two removed, but at the end it does + 1
+				goto URA_UnexpectedInstruction
+			end
 
 			local relativePosition = 0
 
@@ -520,15 +527,18 @@ end
 local brainfuck = function(s)
 
 	s = s:gsub("[^%+%-<>%.,%[%]]+", "") -- remove new lines
+
 	local instList = {}
 	local slen = #s
-	local i = 2 -- 2 because 1st is checked before loop
+	local i = 2 -- 2 because 1st may be checked before loop
 	local lastInst = s:sub(1, 1)
 	local lastInstType = instructions[lastInst]
 	local arithmeticsCount = 0
 	local optimizationCount = 0
 	if (artithmeticsIns[lastInst]) then
 		arithmeticsCount = artithmeticsIns[lastInst]
+	else
+		i = 1
 	end
 
 	while (i <= slen) do
@@ -621,7 +631,7 @@ end
 		while countIRInsWeight(instList) > subFunctionMaxSize-headerBCSize do
 
 			local i = 1
-			local max = #instList	
+			local max = #instList
 			while (i <= max) do
 				local startPos, patternIRList = nextCandidateWhileLoop(instList, i, max)
 				if startPos ~= nil then
