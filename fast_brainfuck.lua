@@ -136,18 +136,18 @@ local IRAllocators
 
 if jit then
 	IRAllocators = {
-		[INC] = ffi.typeof("uint16_t[" ..  IRSize[INC] + 1 .. "]"),
-		[MOVE] = ffi.typeof("uint16_t[" ..  IRSize[MOVE] + 1 .. "]"),
-		[LOOPSTART] = ffi.typeof("uint16_t[" ..  IRSize[LOOPSTART] + 1 .. "]"),
-		[LOOPEND] = ffi.typeof("uint16_t[" ..  IRSize[LOOPEND] + 1 .. "]"),
-		[PRINT] = ffi.typeof("uint16_t[" ..  IRSize[PRINT] + 1 .. "]"),
-		[READ] = ffi.typeof("uint16_t[" ..  IRSize[READ] + 1 .. "]"),
-		[ASSIGNATION] = ffi.typeof("uint16_t[" ..  IRSize[ASSIGNATION] + 1 .. "]"),
-		[MEMSET] = ffi.typeof("uint16_t[" ..  IRSize[MEMSET] + 1 .. "]"),
-		[UNROLLED_ASSIGNATION] = ffi.typeof("uint16_t[" ..  IRSize[UNROLLED_ASSIGNATION] + 1 .. "]"),
-		[IFSTART] = ffi.typeof("uint16_t[" ..  IRSize[IFSTART] + 1 .. "]"),
-		[IFEND] = ffi.typeof("uint16_t[" ..  IRSize[IFEND] + 1 .. "]"),
-		[FUNC_CALL] = ffi.typeof("uint16_t[" ..  IRSize[FUNC_CALL] + 1 .. "]")
+		[INC] = ffi.typeof("int16_t[" ..  IRSize[INC] + 1 .. "]"),
+		[MOVE] = ffi.typeof("int16_t[" ..  IRSize[MOVE] + 1 .. "]"),
+		[LOOPSTART] = ffi.typeof("int16_t[" ..  IRSize[LOOPSTART] + 1 .. "]"),
+		[LOOPEND] = ffi.typeof("int16_t[" ..  IRSize[LOOPEND] + 1 .. "]"),
+		[PRINT] = ffi.typeof("int16_t[" ..  IRSize[PRINT] + 1 .. "]"),
+		[READ] = ffi.typeof("int16_t[" ..  IRSize[READ] + 1 .. "]"),
+		[ASSIGNATION] = ffi.typeof("int16_t[" ..  IRSize[ASSIGNATION] + 1 .. "]"),
+		[MEMSET] = ffi.typeof("int16_t[" ..  IRSize[MEMSET] + 1 .. "]"),
+		[UNROLLED_ASSIGNATION] = ffi.typeof("int16_t[" ..  IRSize[UNROLLED_ASSIGNATION] + 1 .. "]"),
+		[IFSTART] = ffi.typeof("int16_t[" ..  IRSize[IFSTART] + 1 .. "]"),
+		[IFEND] = ffi.typeof("int16_t[" ..  IRSize[IFEND] + 1 .. "]"),
+		[FUNC_CALL] = ffi.typeof("int16_t[" ..  IRSize[FUNC_CALL] + 1 .. "]")
 	}
 end
 
@@ -767,7 +767,6 @@ end
 	local text = f:read("*a")
 	f:close()
 	local code = brainfuck(text)
-
 	if arg[2] then
 		local f = io.open(arg[2], "w")
 		assert(f, "Could not write to " .. arg[2])
@@ -783,7 +782,6 @@ end
 
 	if not brainfuckFunc then
 		print("--Could not compile to Lua, error : \n--", error)
-		print(code)
 	else
 		local t = os.clock()
 		brainfuckFunc()
