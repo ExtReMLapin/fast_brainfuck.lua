@@ -6,6 +6,7 @@ local vmSettings = {
 	cellType = "char",
 }
 
+local ffi = require("ffi")
 
 local autoDetectSubfunctionDispatching = true -- will "guess" number of instruction and if needed enable subfunction dispatching
 local shouldCreateSubFunctions = false -- only use for HUGE programs because it slows down the code
@@ -61,7 +62,7 @@ local IRToCode = {
 	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
 	[IFSTART] = "if (data[i] ~= 0) then ",
 	[IFEND] = "end ",
-	[FUNC_CALL] = "%s() "
+	[FUNC_CALL] = subFunctionPrefix .. "%i() "
 }
 
 
@@ -130,12 +131,32 @@ local IRSize = {
 	[FUNC_CALL] = 1
 }
 
+
+local IRAllocators
+
+if jit then
+	IRAllocators = {
+		[INC] = ffi.typeof("uint16_t[" ..  IRSize[INC] + 1 .. "]"),
+		[MOVE] = ffi.typeof("uint16_t[" ..  IRSize[MOVE] + 1 .. "]"),
+		[LOOPSTART] = ffi.typeof("uint16_t[" ..  IRSize[LOOPSTART] + 1 .. "]"),
+		[LOOPEND] = ffi.typeof("uint16_t[" ..  IRSize[LOOPEND] + 1 .. "]"),
+		[PRINT] = ffi.typeof("uint16_t[" ..  IRSize[PRINT] + 1 .. "]"),
+		[READ] = ffi.typeof("uint16_t[" ..  IRSize[READ] + 1 .. "]"),
+		[ASSIGNATION] = ffi.typeof("uint16_t[" ..  IRSize[ASSIGNATION] + 1 .. "]"),
+		[MEMSET] = ffi.typeof("uint16_t[" ..  IRSize[MEMSET] + 1 .. "]"),
+		[UNROLLED_ASSIGNATION] = ffi.typeof("uint16_t[" ..  IRSize[UNROLLED_ASSIGNATION] + 1 .. "]"),
+		[IFSTART] = ffi.typeof("uint16_t[" ..  IRSize[IFSTART] + 1 .. "]"),
+		[IFEND] = ffi.typeof("uint16_t[" ..  IRSize[IFEND] + 1 .. "]"),
+		[FUNC_CALL] = ffi.typeof("uint16_t[" ..  IRSize[FUNC_CALL] + 1 .. "]")
+	}
+end
+
 local function countIRInsWeight(IRList)
 	local c = 0
 	local i = 1
 	local max = #IRList
 	while (i <= max) do
-		c = c + IRWeightLocalValue[IRList[i][1]]
+		c = c + IRWeightLocalValue[IRList[i][0]]
 		i = i + 1
 	end
 	return c
@@ -155,7 +176,7 @@ local function nextCandidateWhileLoop(IRList, curPos, maxPos)
 		local ifDepth = 0
 
 		while (loopStart + i <= maxPos) do
-			local curIR = IRList[loopStart + i][1]
+			local curIR = IRList[loopStart + i][0]
 			if curIR == LOOPSTART then
 				whileDepth = whileDepth + 1
 			elseif curIR == LOOPEND then
@@ -209,9 +230,10 @@ end
 
 --cmp if two IR are equal, check IR and operands
 local function IREqual(IR1, IR2)
-	if IR1[1] ~= IR2[1] then return false end
+	if IR1[0] ~= IR2[0] then return false end
 	local i = 1
-	while (i <= IRSize[IR1[1]] ) do
+	local max = IRSize[IR1[0]]
+	while (i <= max ) do
 		if IR1[i] ~= IR2[i] then return false end
 		i = i + 1
 	end
@@ -276,19 +298,19 @@ local function firstPassOptimization(instList)
 	local max = #instList
 	local optimizationCount = 0
 	while (i <= max - 3) do
-		if 	instList[i][1] == LOOPSTART and
-			instList[i + 1][1] == INC and
-			instList[i + 2][1] == LOOPEND then -- checks for the ins pattern, ignoring the content of the loop beside if it's inc or not
+		if 	instList[i][0] == LOOPSTART and
+			instList[i + 1][0] == INC and
+			instList[i + 2][0] == LOOPEND then -- checks for the ins pattern, ignoring the content of the loop beside if it's inc or not
 				table.remove(instList, i)
 				table.remove(instList, i)
-				if instList[i + 1][1] == INC then -- merge with next ins if possible
-					instList[i] = {ASSIGNATION, instList[i + 1][2]}
+				if instList[i + 1][0] == INC then -- merge with next ins if possible
+					instList[i] = IRAllocators[ASSIGNATION](ASSIGNATION, instList[i + 1][1])
 					table.remove(instList, i + 1)
 					max = max - 1
 				else
-					instList[i] = {ASSIGNATION, 0}
+					instList[i] = IRAllocators[ASSIGNATION](ASSIGNATION, 0)
 				end
-				if (instList[i-1] and instList[i-1][1] == INC) then -- also merge with previous one if possible
+				if (instList[i-1] and instList[i-1][0] == INC) then -- also merge with previous one if possible
 					table.remove(instList, i-1)
 					max = max - 1
 				end
@@ -342,16 +364,16 @@ local function secondPassMemset(instList)
 	local optimizationCount = 0
 
 	while (i <= max - 2) do
-		if instList[i][1] == MOVE and instList[i][2] == 1 and instList[i + 1][1] == ASSIGNATION then
+		if instList[i][0] == MOVE and instList[i][1] == 1 and instList[i + 1][0] == ASSIGNATION then
 			currentFindSize = 1
-			currentAssignation = instList[i + 1][2]
+			currentAssignation = instList[i + 1][1]
 			local i2 = i + 2
 
 			while (i2 <= max) do
 				local ptsShiftCandidate = instList[i2]
 				local dataAssignationCandidate = instList[i2 + 1]
 
-				if ptsShiftCandidate[1] ~= MOVE or ptsShiftCandidate[2] ~= 1 or dataAssignationCandidate[1] ~= ASSIGNATION or dataAssignationCandidate[2] ~= currentAssignation then
+				if ptsShiftCandidate[0] ~= MOVE or ptsShiftCandidate[1] ~= 1 or dataAssignationCandidate[0] ~= ASSIGNATION or dataAssignationCandidate[1] ~= currentAssignation then
 					-- create memset instruction
 					if currentFindSize < minimumAssignations then
 						i = i + (currentFindSize * 2) - 1 -- -1 because right after this batch could be another one, don't skip the first member
@@ -367,27 +389,27 @@ local function secondPassMemset(instList)
 
 					-- the assignation row may not have started with a pointer shift for some reasons, so let's cover this case
 					-- we handle the possible ptr+1 or just ptr as starting mem pos
-					if instList[i - 1][1] == ASSIGNATION and instList[i - 1][2] == currentAssignation then
+					if instList[i - 1][0] == ASSIGNATION and instList[i - 1][1] == currentAssignation then
 						i = i - 1
 						table.remove(instList, i)
-						table.insert(instList, i, {MEMSET, 0, currentFindSize + 1, currentAssignation})
+						table.insert(instList, i, IRAllocators[MEMSET](MEMSET, 0, currentFindSize + 1, currentAssignation))
 						max = max - (currentFindSize + 1) * 2
 					else
-						table.insert(instList, i, {MEMSET, 1, currentFindSize , currentAssignation})
+						table.insert(instList, i, IRAllocators[MEMSET](MEMSET, 1, currentFindSize , currentAssignation))
 						max = max - (currentFindSize * 2 - 1)
 					end
 
 					local nextIns = instList[i + 1]
 					-- folding with next possible ptr ins
-					if nextIns[1] == MOVE then
-						if nextIns[2] + currentFindSize == 0 then
+					if nextIns[0] == MOVE then
+						if nextIns[1] + currentFindSize == 0 then
 							table.remove(instList, i + 1)
 							i = i - 1
 						else
-							nextIns[2] = nextIns[2] + currentFindSize
+							nextIns[1] = nextIns[1] + currentFindSize
 						end
 					else
-						table.insert(instList, i + 1, {MOVE, currentFindSize})
+						table.insert(instList, i + 1, IRAllocators[MOVE](MOVE, currentFindSize))
 						i = i + 1
 					end
 					optimizationCount = optimizationCount + 1
@@ -454,11 +476,11 @@ local function thirdPassUnRolledAssignation(instList)
 	local max = #instList
 
 	while (i <= max - 6) do
-		if instList[i][1] == LOOPSTART then
+		if instList[i][0] == LOOPSTART then
 			local loopStart = i
 			local loopEnd = i + 1
 			if not instList[loopEnd] then return end
-			if instList[loopEnd][1] == LOOPEND then --dead code `[]`
+			if instList[loopEnd][0] == LOOPEND then --dead code `[]`
 				table.remove(instList, i)
 				table.remove(instList, i)
 				max = max - 2
@@ -469,11 +491,11 @@ local function thirdPassUnRolledAssignation(instList)
 			local relativePosition = 0
 
 			local assignationTable = {}
-			while (instList[loopEnd][1] ~= LOOPEND) do
+			while (instList[loopEnd][0] ~= LOOPEND) do
 				if loopEnd == max then return end
 
-				local curIns = instList[loopEnd][1]
-				local curOperand = instList[loopEnd][2]
+				local curIns = instList[loopEnd][0]
+				local curOperand = instList[loopEnd][1]
 
 				if curIns == MOVE then
 					relativePosition = relativePosition + curOperand
@@ -502,19 +524,19 @@ local function thirdPassUnRolledAssignation(instList)
 			end
 
 
-			table.insert(instList, loopStart, {IFSTART})
+			table.insert(instList, loopStart, IRAllocators[IFSTART](IFSTART))
 			local assignationCount = 1
 			for jmp, inc in pairs(assignationTable) do
 				if jmp ~= 0 then
 					assignationCount = assignationCount + 1
 					--	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
-					table.insert(instList, loopStart + 1, {UNROLLED_ASSIGNATION, jmp, jmp, assignationTable[0], inc})
+					table.insert(instList, loopStart + 1, IRAllocators[UNROLLED_ASSIGNATION](UNROLLED_ASSIGNATION, jmp, jmp, assignationTable[0], inc))
 				end
 			end
 
 			-- not assignationCount + 1 as there is already an offset of 1 reserved for 0 assignation of calculated from the loop definition itself
-			table.insert(instList, loopStart + assignationCount, {ASSIGNATION, 0})
-			table.insert(instList, loopStart + assignationCount + 1, {IFEND})
+			table.insert(instList, loopStart + assignationCount, IRAllocators[ASSIGNATION](ASSIGNATION, 0))
+			table.insert(instList, loopStart + assignationCount + 1, IRAllocators[IFEND](IFEND))
 			max = max + assignationCount + 2 -- +2 because of IFSTART instruction at the start
 			optimizationCount = optimizationCount + assignationCount
 
@@ -563,18 +585,18 @@ local brainfuck = function(s)
 				optimizationCount = optimizationCount + 1
 				arithmeticsCount = arithmeticsCount + arithmeticValue
 			else
-				table.insert(instList, {instructions[curInst]})
+				table.insert(instList, IRAllocators[instructions[curInst]](instructions[curInst]))
 			end
 		else
 			if artithmeticsIns[lastInst] then
 				if arithmeticsCount ~= 0 then
-					table.insert(instList, {instructions[lastInst], arithmeticsCount})
+					table.insert(instList, IRAllocators[instructions[lastInst]](instructions[lastInst], arithmeticsCount))
 				end
 
 				if arithmeticValue then
 					arithmeticsCount = arithmeticValue
 				else
-					table.insert(instList, {instructions[curInst]})
+					table.insert(instList, IRAllocators[instructions[curInst]](instructions[curInst]))
 
 					arithmeticsCount = 0
 				end
@@ -582,7 +604,7 @@ local brainfuck = function(s)
 				if arithmeticValue then
 					arithmeticsCount = arithmeticValue
 				else
-					table.insert(instList, {instructions[curInst]})
+					table.insert(instList, IRAllocators[instructions[curInst]](instructions[curInst]))
 
 					arithmeticsCount = 0
 				end
@@ -602,13 +624,12 @@ local brainfuck = function(s)
 	secondPassMemset(instList)
 	thirdPassUnRolledAssignation(instList)
 
-	if autoDetectSubfunctionDispatching and type(jit) == "table" and countIRInsWeight(instList) > subFunctionMaxSize then
+	if autoDetectSubfunctionDispatching and jit and countIRInsWeight(instList) > subFunctionMaxSize then
 		shouldCreateSubFunctions = true
 	end
 
 	local insTableStr = {}
 	-- lua 54 & jit compatiblity
-	local unpack = unpack or table.unpack
 	local code = [[local data;
 local ffi
 if type(rawget(_G, "jit")) == 'table' then
@@ -640,7 +661,7 @@ end
 		local jit_util = require("jit.util")
 		local loadstring = loadstring or load
 		local headerBCSize = jit_util.funcinfo(loadstring(code)).bytecodes
-
+		local funcId = 0
 		-- while [CANNOT COMPILE]
 		while countIRInsWeight(instList) > subFunctionMaxSize - headerBCSize do
 			local i = 1
@@ -650,11 +671,10 @@ end
 				local startPos, patternIRList = nextCandidateWhileLoop(instList, i, max)
 
 				if startPos ~= nil then
-					local funcName = subFunctionPrefix .. tostring(patternIRList):sub(8)
-					subFunctions[funcName] = patternIRList
+					subFunctions[funcId] = patternIRList
 
 					local replaceCount = replaceIRs(instList, patternIRList, {
-						{FUNC_CALL, funcName}
+						IRAllocators[FUNC_CALL](FUNC_CALL, funcId)
 					}, startPos)
 
 					optReplaceCount = optReplaceCount + replaceCount
@@ -679,7 +699,7 @@ end
 		local subFunctionsNames = {}
 
 		for k, v in pairs(subFunctions) do
-			table.insert(subFunctionsNames, k)
+			table.insert(subFunctionsNames, subFunctionPrefix .. k)
 		end
 
 		if #subFunctionsNames > 0 then
@@ -693,11 +713,20 @@ end
 
 			while (i2 <= max) do
 				local IR = IRtbl[i2]
-				subFIR[i2] = string.format(IRToCode[IR[1]], select(2, unpack(IR))):gsub("%+%-", "-")
+				local OPCount = IR[0]
+				if OPCount == 0 then
+					subFIR[i2] = IRToCode[IR[0]]
+				elseif OPCount == 1 then
+					subFIR[i2] = string.format(IRToCode[IR[0]], IR[1])
+				elseif OPCount == 3 then
+					subFIR[i2] = string.format(IRToCode[IR[0]], IR[1], IR[2], IR[3])
+				else -- 4
+					subFIR[i2] = string.format(IRToCode[IR[0]], IR[1], IR[2], IR[3], IR[4])
+				end
 				i2 = i2 + 1
 			end
 
-			table.insert(subFunctionTableString, string.format("%s = function() %s end ", fName, table.concat(subFIR, "\n")))
+			table.insert(subFunctionTableString, string.format("%s%i = function() %s end ", subFunctionPrefix, fName, table.concat(subFIR, "\n")))
 		end
 
 		code = code .. table.concat(subFunctionTableString, "\n") .. "\n"
@@ -708,7 +737,17 @@ end
 
 	while (i <= max) do
 		local IR = instList[i]
-		insTableStr[i] = string.format(IRToCode[IR[1]], select(2, unpack(IR))):gsub("%+%-", "-")
+		local OPCount = IR[0]
+		if OPCount == 0 then
+			insTableStr[i] = IRToCode[IR[0]]
+		elseif OPCount == 1 then
+			insTableStr[i] = string.format(IRToCode[IR[0]], IR[1])
+		elseif OPCount == 3 then
+			insTableStr[i] = string.format(IRToCode[IR[0]], IR[1], IR[2], IR[3])
+		else -- 4
+			insTableStr[i] = string.format(IRToCode[IR[0]], IR[1], IR[2], IR[3], IR[4])
+		end
+		--insTableStr[i] = string.format(IRToCode[IR[0]], select(2, unpack(IR))):gsub("%+%-", "-")
 		i = i + 1
 	end
 
