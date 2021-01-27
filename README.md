@@ -27,7 +27,7 @@ Tested on Ryzen 3700x | 32gb ram 2400mhz
 ### 2^16 BC ins limit on LuaJIT
 LuaJIT had an instruction limit of 2^16 on `JMP` because of size of register `D`
 When the main code chunk is greater or equal to 2^16, it scans for chunks of code it can dispatch to a subfunction.
-It's only enabled on LuaJIT and turns itself on only when ins cound is >= 2^16
+It's only enabled on LuaJIT and turns itself on only when ins count is >= 2^16
 
 ### Optimization passes
 
