@@ -118,7 +118,7 @@ into
 
 
 ```lua
-	data[i+jmp1] = data[i+jmp1] = (-(data[i]/inc2))*inc1
+	data[i+jmp1] = (-(data[i]/inc2))*inc1
 	data[i] = 0
 	i = i + jmp1
 ```
