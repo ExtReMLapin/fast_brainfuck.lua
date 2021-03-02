@@ -1,4 +1,6 @@
 # fast_brainfuck.lua
+![Credits to DacodaDragon for the image](https://user-images.githubusercontent.com/3909752/109632271-20e97f80-7b47-11eb-8568-5e52557b0522.jpg)
+
 High performance brainfuck transpiler/interpreter for Lua with FFI support
 
 
