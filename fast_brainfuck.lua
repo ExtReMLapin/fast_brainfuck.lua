@@ -357,7 +357,8 @@ local function secondPassMemset(instList)
     local optimizationCount = 0
 
     while (i <= max - 2) do
-        if instList[i][1] == MOVE and instList[i][2] == 1 and instList[i + 1][1] == ASSIGNATION then
+        if instList[i][1] == MOVE and math.abs(instList[i][2]) == 1 and instList[i + 1][1] == ASSIGNATION then
+            local movingDirection = instList[i][2]
             currentFindSize = 1
             currentAssignation = instList[i + 1][2]
             local i2 = i + 2
@@ -366,7 +367,7 @@ local function secondPassMemset(instList)
                 local ptsShiftCandidate = instList[i2]
                 local dataAssignationCandidate = instList[i2 + 1]
 
-                if ptsShiftCandidate[1] ~= MOVE or ptsShiftCandidate[2] ~= 1 or dataAssignationCandidate[1] ~= ASSIGNATION or dataAssignationCandidate[2] ~= currentAssignation then
+                if ptsShiftCandidate[1] ~= MOVE or ptsShiftCandidate[2] ~= movingDirection or dataAssignationCandidate[1] ~= ASSIGNATION or dataAssignationCandidate[2] ~= currentAssignation then
                     -- create memset instruction
                     if currentFindSize < minimumAssignations then
                         i = i + (currentFindSize * 2) - 1 -- -1 because right after this batch could be another one, don't skip the first member
@@ -387,11 +388,19 @@ local function secondPassMemset(instList)
                         i = i - 1
                         table.remove(instList, i)
 
-                        table.insert(instList, i, {MEMSET, 0, currentFindSize + 1, currentAssignation})
+                        if movingDirection == 1 then
+                            table.insert(instList, i, {MEMSET, 0, currentFindSize + 1, currentAssignation})
+                        else
+                            table.insert(instList, i, {MEMSET, -currentFindSize, currentFindSize + 1, currentAssignation})
+                        end
 
                         max = max - (currentFindSize + 1) * 2
                     else
-                        table.insert(instList, i, {MEMSET, 1, currentFindSize, currentAssignation})
+                        if movingDirection == 1 then
+                            table.insert(instList, i, {MEMSET, 1, currentFindSize, currentAssignation})
+                        else
+                            table.insert(instList, i, {MEMSET, -currentFindSize - 1, currentFindSize, currentAssignation})
+                        end
 
                         max = max - (currentFindSize * 2 - 1)
                     end
