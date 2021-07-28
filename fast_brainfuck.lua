@@ -546,7 +546,7 @@ local function thirdPassUnRolledAssignation(instList)
                     assignationCount = assignationCount + 1
 
                     --	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
-                    table.insert(instList, loopStart + 1, {UNROLLED_ASSIGNATION, jmp, jmp, assignationTable[0], inc})
+                    table.insert(instList, loopStart + assignationCount - 1, {UNROLLED_ASSIGNATION, jmp, jmp, assignationTable[0], inc})
                 end
             end
 
