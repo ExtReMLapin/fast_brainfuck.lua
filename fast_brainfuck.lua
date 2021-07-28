@@ -413,10 +413,10 @@ local function secondPassMemset(instList)
                             table.remove(instList, i + 1)
                             i = i - 1
                         else
-                            nextIns[2] = nextIns[2] + currentFindSize
+                            nextIns[2] = nextIns[2] + (currentFindSize * movingDirection)
                         end
                     else
-                        table.insert(instList, i + 1, {MOVE, currentFindSize})
+                        table.insert(instList, i + 1, {MOVE, currentFindSize * movingDirection})
 
                         i = i + 1
                     end
