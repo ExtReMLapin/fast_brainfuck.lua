@@ -57,7 +57,7 @@ local IRToCode = {
     [PRINT] = "w(data[i])",
     [READ] = "data[i]=r()",
     [ASSIGNATION] = "data[i]=%i ",
-    [MEMSET] = "ffi.fill(data+i+%i, %i, %i)",
+    [MEMSET] = "ffi_fill(data+i+%i, %i, %i)",
     [UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
     [IFSTART] = "if (data[i] ~= 0) then ",
     [IFEND] = "end ",
@@ -91,7 +91,7 @@ local IRWeightLocalValue = {
     [PRINT] = 3,
     [READ] = 3,
     [ASSIGNATION] = 2,
-    [MEMSET] = 6,
+    [MEMSET] = 6, -- todo : recalc weight
     [UNROLLED_ASSIGNATION] = 9,
     [IFSTART] = 3,
     [IFEND] = 0,
@@ -108,7 +108,7 @@ local eng = {
     [LOOPEND] = "LOOPEND",
     [READ] = "READ",
     [ASSIGNATION] = "ASSIGNATION",
-    [MEMSET] = "MEMSET",
+    [MEMSET] = "MEMSET", -- todo : recalc weight
     [UNROLLED_ASSIGNATION] = "UNROLLED_ASSIGNATION",
     [IFSTART] = "IFSTART",
     [IFEND] = "IFEND",
@@ -684,9 +684,13 @@ local brainfuck = function(s)
     local unpack = unpack or table.unpack
     local code = [[local data;
 local ffi
+local ffi_fill
 if type(rawget(_G, "jit")) == 'table' then
+
 	ffi = require("ffi")
 	data = ffi.new("]] .. vmSettings.cellType .. "[" .. vmSettings.ram .. [[]")
+    jit.opt.start("loopunroll=100")
+    ffi_fill = ffi.fill
 else
 	data = {}
 	local i = 0
