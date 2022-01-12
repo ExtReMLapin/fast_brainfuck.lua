@@ -33,6 +33,10 @@ It's only enabled on LuaJIT and turns itself on only when ins count is >= 2^16
 
 ### Optimization passes
 
+Long story short, I convert brainfuck code to Intermediate Representation that can itself be turned into Lua (it's either way turned into lua at the end so it can be JIT compiled by LuaJIT compiler)
+
+Before being turned into Lua, it gets optimized thru multiple optimisation passes, each optimisation pass has it's own dedicated instruction that got added in the instruction (IR) definitions in the code.
+
 
 #### 1. Folding
 
