@@ -7,7 +7,7 @@ local STATS = true -- set to true to print optimizations count for each pass
 
 local vmSettings = {
     ram = 32768,
-    cellType = "char",
+    cellType = "uint8_t",
 }
 
 local autoDetectSubfunctionDispatching = true -- will "guess" number of instruction and if needed enable subfunction dispatching
@@ -58,7 +58,7 @@ local IRToCode = {
     [READ] = "data[i]=r()",
     [ASSIGNATION] = "data[i]=%i ",
     [MEMSET] = "ffi_fill(data+i+%i, %i, %i)",
-    [UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
+    [UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + math.floor(-(data[i]/%i))*%i ",
     [IFSTART] = "if (data[i] ~= 0) then ",
     [IFEND] = "end ",
     [FUNC_CALL] = "%s() ",
@@ -715,7 +715,8 @@ local w2 = function(c, count)
 end
 
 local r = function()
-	return io.read(1):byte()
+    local c = io.read(1)
+    if c then return string.byte(c) else return 0 end
 end
 
 ]]
