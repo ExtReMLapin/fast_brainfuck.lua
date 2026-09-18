@@ -6,8 +6,16 @@ end
 local STATS = true -- set to true to print optimizations count for each pass
 
 local vmSettings = {
-    ram = 32768,
+    ram = 1048576,
     cellType = "uint8_t",
+    -- Cells reserved on *each* side of the tape. The pointer is not bounds checked at runtime (that
+    -- would cost more than everything else this transpiler saves), so a program that walks off the
+    -- tape writes raw memory. The guard turns the usual small overshoots -- and the very common
+    -- transient "<" at cell 0 -- into harmless writes instead of a segfault.
+    guard = 65536,
+    -- Set to true to emit a pointer range check after every move. Slow, but it reports the offending
+    -- offset instead of corrupting memory, which is what you want when a .bf program misbehaves.
+    boundsCheck = false,
 }
 
 local autoDetectSubfunctionDispatching = true -- will "guess" number of instruction and if needed enable subfunction dispatching
@@ -64,6 +72,12 @@ local IRToCode = {
     [FUNC_CALL] = "%s() ",
     [PRINT_REPEAT] = "w2(data[i], %i)"
 }
+
+-- MOVE is the only instruction that changes the pointer, so checking it there catches every excursion.
+if vmSettings.boundsCheck then
+    IRToCode[MOVE] = "i=i+%i if i < 0 or i >= " .. vmSettings.ram ..
+        [[ then error("brainfuck pointer out of bounds: " .. i, 0) end ]]
+end
 
 --weight in LuaJIT bc of each IR in subfunction context
 local IRWeightUpValue = {
@@ -282,7 +296,9 @@ local function firstPassOptimization(instList)
     local optimizationCount = 0
 
     while (i <= max - 3) do
-        if instList[i][1] == LOOPSTART and instList[i + 1][1] == INC and instList[i + 2][1] == LOOPEND then
+        -- Only a step of +-1 is guaranteed to reach 0 : [--] on an odd cell walks 3 -> 1 -> 255 -> 253 ...
+        -- and never lands on 0, so it must stay an infinite loop instead of becoming data[i] = 0.
+        if instList[i][1] == LOOPSTART and instList[i + 1][1] == INC and math.abs(instList[i + 1][2]) == 1 and instList[i + 2][1] == LOOPEND then
             -- checks for the ins pattern, ignoring the content of the loop beside if it's inc or not
             table.remove(instList, i)
             table.remove(instList, i)
@@ -367,7 +383,8 @@ local function secondPassMemset(instList)
                 local ptsShiftCandidate = instList[i2]
                 local dataAssignationCandidate = instList[i2 + 1]
 
-                if ptsShiftCandidate[1] ~= MOVE or ptsShiftCandidate[2] ~= movingDirection or dataAssignationCandidate[1] ~= ASSIGNATION or dataAssignationCandidate[2] ~= currentAssignation then
+                -- dataAssignationCandidate is nil when the list ends on a lone MOVE (i2 == max) : the pair is incomplete, so the run stops here
+                if dataAssignationCandidate == nil or ptsShiftCandidate[1] ~= MOVE or ptsShiftCandidate[2] ~= movingDirection or dataAssignationCandidate[1] ~= ASSIGNATION or dataAssignationCandidate[2] ~= currentAssignation then
                     -- create memset instruction
                     if currentFindSize < minimumAssignations then
                         i = i + (currentFindSize * 2) - 1 -- -1 because right after this batch could be another one, don't skip the first member
@@ -384,7 +401,8 @@ local function secondPassMemset(instList)
 
                     -- the assignation row may not have started with a pointer shift for some reasons, so let's cover this case
                     -- we handle the possible ptr+1 or just ptr as starting mem pos
-                    if instList[i - 1][1] == ASSIGNATION and instList[i - 1][2] == currentAssignation then
+                    -- (i > 1 guard : there is no previous instruction when the run starts at the very beginning of the list)
+                    if i > 1 and instList[i - 1][1] == ASSIGNATION and instList[i - 1][2] == currentAssignation then
                         i = i - 1
                         table.remove(instList, i)
 
@@ -393,16 +411,12 @@ local function secondPassMemset(instList)
                         else
                             table.insert(instList, i, {MEMSET, -currentFindSize, currentFindSize + 1, currentAssignation})
                         end
-
-                        max = max - (currentFindSize + 1) * 2
                     else
                         if movingDirection == 1 then
                             table.insert(instList, i, {MEMSET, 1, currentFindSize, currentAssignation})
                         else
                             table.insert(instList, i, {MEMSET, -currentFindSize - 1, currentFindSize, currentAssignation})
                         end
-
-                        max = max - (currentFindSize * 2 - 1)
                     end
 
                     local nextIns = instList[i + 1]
@@ -420,6 +434,10 @@ local function secondPassMemset(instList)
 
                         i = i + 1
                     end
+
+                    -- the removals/inserts above are too fiddly to track by hand (the old arithmetic
+                    -- under-counted, which silently ended the pass early), so just resync
+                    max = #instList
 
                     optimizationCount = optimizationCount + 1
                     goto doubleBreakMemset
@@ -529,7 +547,15 @@ local function thirdPassUnRolledAssignation(instList)
                 goto URA_UnexpectedInstruction
             end
 
-            --assert(assignationTable[0] ~= nil, "Expected base pointer in loop")
+            -- The rewrite computes the trip count as -(data[i]/base). That is only sound for base == -1 :
+            --   * base == nil  : the control cell is never touched -> infinite loop, and it used to be
+            --                    emitted as a nil operand, crashing string.format() at codegen time.
+            --   * base >= 0    : the control cell never decreases -> infinite loop (or wraps 256 times).
+            --   * base <= -2   : exact only when the cell is a multiple of |base| ; otherwise the real
+            --                    program wraps around modulo 256 and the trip count is not data[i]/base.
+            if assignationTable[0] ~= -1 then
+                goto URA_UnexpectedInstruction
+            end
             max = max - (loopEnd - loopStart) - 1
 
             while (loopEnd >= loopStart) do
@@ -685,19 +711,20 @@ local brainfuck = function(s)
     local code = [[local data;
 local ffi
 local ffi_fill
+local tapeAnchor -- keeps the underlying buffer alive : `data` is an interior pointer into it
 if type(rawget(_G, "jit")) == 'table' then
 
 	ffi = require("ffi")
-	data = ffi.new("]] .. vmSettings.cellType .. "[" .. vmSettings.ram .. [[]")
+	tapeAnchor = ffi.new("]] .. vmSettings.cellType .. "[" .. (vmSettings.ram + 2 * vmSettings.guard) .. [[]")
+	-- offset into the middle so cell 0 has guard cells on both sides
+	data = tapeAnchor + ]] .. vmSettings.guard .. [[
+
     jit.opt.start("loopunroll=100")
     ffi_fill = ffi.fill
 else
-	data = {}
-	local i = 0
-	while i < ]] .. vmSettings.ram .. [[ do
-		data[i] = 0
-		i = i + 1
-	end
+	-- No prefill : the tape is large and negative indices land in the hash part, so filling it
+	-- eagerly would cost far more than the program itself. Unset cells read as 0 instead.
+	data = setmetatable({}, {__index = function() return 0 end})
 end
 local i = 0
 
