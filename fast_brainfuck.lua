@@ -58,19 +58,21 @@ local instructions = {
 }
 
 local IRToCode = {
-    [INC] = "data[i]=data[i]+%i ",
+    [INC] = "data[i+%i]=data[i+%i]+%i ",
     [MOVE] = "i=i+%i ",
-    [LOOPSTART] = "while data[i]~=0 do ",
+    [LOOPSTART] = "while data[i+%i]~=0 do ",
     [LOOPEND] = "end ",
-    [PRINT] = "w(data[i])",
-    [READ] = "data[i]=r()",
-    [ASSIGNATION] = "data[i]=%i ",
+    [PRINT] = "w(data[i+%i])",
+    [READ] = "data[i+%i]=r()",
+    [ASSIGNATION] = "data[i+%i]=%i ",
     [MEMSET] = "ffi_fill(data+i+%i, %i, %i)",
-    [UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + math.floor(-(data[i]/%i))*%i ",
-    [IFSTART] = "if (data[i] ~= 0) then ",
+    -- the base is pinned to -1 by thirdPassUnRolledAssignation, so the trip count
+    -- -(data[i]/base) collapses to data[i] : no float division, no floor at runtime
+    [UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + data[i+%i]*%i ",
+    [IFSTART] = "if (data[i+%i] ~= 0) then ",
     [IFEND] = "end ",
     [FUNC_CALL] = "%s() ",
-    [PRINT_REPEAT] = "w2(data[i], %i)"
+    [PRINT_REPEAT] = "w2(data[i+%i], %i)"
 }
 
 -- MOVE is the only instruction that changes the pointer, so checking it there catches every excursion.
@@ -131,20 +133,22 @@ local eng = {
 }
 
 -- number of operands
+-- Arities AFTER fourthPassOffsetAddressing, which gives every data-touching IR an
+-- offset operand. That pass always runs, so these are the only arities codegen sees.
 local IRSize = {
-    [INC] = 1,
+    [INC] = 3,
     [MOVE] = 1,
-    [LOOPSTART] = 0,
+    [LOOPSTART] = 1,
     [LOOPEND] = 0,
-    [PRINT] = 0,
-    [READ] = 0,
-    [ASSIGNATION] = 1,
+    [PRINT] = 1,
+    [READ] = 1,
+    [ASSIGNATION] = 2,
     [MEMSET] = 3,
     [UNROLLED_ASSIGNATION] = 4,
-    [IFSTART] = 0,
+    [IFSTART] = 1,
     [IFEND] = 0,
     [FUNC_CALL] = 1,
-    [PRINT_REPEAT] = 1,
+    [PRINT_REPEAT] = 2,
 }
 
 local function countIRInsWeight(IRList)
@@ -572,7 +576,7 @@ local function thirdPassUnRolledAssignation(instList)
                     assignationCount = assignationCount + 1
 
                     --	[UNROLLED_ASSIGNATION] = "data[i+%i] = data[i+%i] + (-(data[i]/%i))*%i ",
-                    table.insert(instList, loopStart + assignationCount - 1, {UNROLLED_ASSIGNATION, jmp, jmp, assignationTable[0], inc})
+                    table.insert(instList, loopStart + assignationCount - 1, {UNROLLED_ASSIGNATION, jmp, jmp, inc})
                 end
             end
 
@@ -591,6 +595,184 @@ local function thirdPassUnRolledAssignation(instList)
 
     if STATS then
         print("--Unrolled dynamic assignation pass : ", optimizationCount)
+    end
+end
+
+
+
+--[[
+    A loop is "offset transparent" when carrying a pending offset straight through it is
+    legal : its body must move the pointer by a net zero, and every construct nested in it
+    must be transparent too. If anything inside forces the pointer to be materialised, the
+    pending offset is lost at that point and the tail of the body would no longer line up
+    with the loop header, so the whole construct has to be treated as opaque.
+
+    This is what makes the offset pass worth anything : without it every hot loop would
+    flush at its own boundary and the inner loops -- where all the time goes -- would keep
+    updating the pointer on every iteration.
+]]
+local function computeOffsetTransparency(instList)
+    local transparent = {}
+    local stack = {}
+    local depth = 0
+    local i = 1
+    local max = #instList
+
+    while (i <= max) do
+        local op = instList[i][1]
+
+        if op == LOOPSTART or op == IFSTART then
+            depth = depth + 1
+            stack[depth] = {i, 0, true}
+        elseif op == LOOPEND or op == IFEND then
+            local top = stack[depth]
+
+            if top then
+                stack[depth] = nil
+                depth = depth - 1
+
+                -- net zero movement and nothing opaque inside
+                local ok = (top[2] == 0) and top[3]
+                transparent[top[1]] = ok
+
+                -- an opaque child drags its parent down with it : the flush it forces
+                -- happens in the middle of the parent body
+                if not ok and depth > 0 then
+                    stack[depth][3] = false
+                end
+            end
+        elseif op == MOVE then
+            if depth > 0 then
+                stack[depth][2] = stack[depth][2] + instList[i][2]
+            end
+        end
+
+        i = i + 1
+    end
+
+    return transparent
+end
+
+--[[
+    Offset addressing.
+
+    Brainfuck interleaves pointer moves with cell updates, so the naive lowering spends
+    most of its instructions maintaining `i` :
+
+        i=i+1 data[i]=data[i]+1 i=i+2 data[i]=data[i]-3 i=i-3
+
+    Nothing observes `i` in between, so the moves can be folded into the accesses and the
+    pointer materialised only when control flow actually branches on it :
+
+        data[i+1]=data[i+1]+1 data[i+3]=data[i+3]-3
+
+    The three moves are gone. In a hot loop whose body has net-zero movement -- which is
+    almost every brainfuck loop -- every single pointer update disappears, and LuaJIT gets
+    a straight run of constant-offset loads and stores it can keep in registers.
+
+    Pending offsets are flushed before LOOPSTART/LOOPEND/IFSTART/IFEND : those read data[i]
+    and close basic blocks, so `i` has to be real there. Everything else just accumulates.
+]]
+local function fourthPassOffsetAddressing(instList)
+    local transparent = computeOffsetTransparency(instList)
+    local out = {}
+    local outN = 0
+    local pending = 0
+    local movesIn = 0
+    local movesOut = 0
+    local inputSize = #instList
+    -- tracks, for each open construct, whether we carried the offset into it
+    local openStack = {}
+    local openDepth = 0
+
+    local function emit(IR)
+        outN = outN + 1
+        out[outN] = IR
+    end
+
+    -- the pointer has to be real before anything branches on data[i]
+    local function materialise()
+        if pending ~= 0 then
+            movesOut = movesOut + 1
+            emit({MOVE, pending})
+            pending = 0
+        end
+    end
+
+    local i = 1
+
+    while (i <= inputSize) do
+        local IR = instList[i]
+        local op = IR[1]
+
+        if op == MOVE then
+            movesIn = movesIn + 1
+            pending = pending + IR[2]
+        elseif op == INC then
+            emit({INC, pending, pending, IR[2]})
+        elseif op == ASSIGNATION then
+            emit({ASSIGNATION, pending, IR[2]})
+        elseif op == PRINT then
+            emit({PRINT, pending})
+        elseif op == READ then
+            emit({READ, pending})
+        elseif op == PRINT_REPEAT then
+            emit({PRINT_REPEAT, pending, IR[2]})
+        elseif op == MEMSET then
+            -- MEMSET already addresses data+i+offset, so the pending shift just folds in
+            emit({MEMSET, pending + IR[2], IR[3], IR[4]})
+        elseif op == UNROLLED_ASSIGNATION then
+            -- {UNROLLED_ASSIGNATION, jmp, jmp, inc} -> target offset, target offset, control offset, inc
+            emit({UNROLLED_ASSIGNATION, pending + IR[2], pending + IR[2], pending, IR[4]})
+        elseif op == LOOPSTART or op == IFSTART then
+            if transparent[i] then
+                -- carry the offset in : nothing inside will disturb it
+                emit({op, pending})
+            else
+                materialise()
+                emit({op, 0})
+            end
+
+            openDepth = openDepth + 1
+            openStack[openDepth] = transparent[i]
+        elseif op == LOOPEND or op == IFEND then
+            -- an opaque body was entered at offset 0, so it has to come back to 0 for the
+            -- next iteration to address the same cells as the first
+            if not openStack[openDepth] then
+                materialise()
+            end
+
+            openStack[openDepth] = nil
+            openDepth = openDepth - 1
+            emit(IR)
+        else
+            materialise()
+            emit(IR)
+        end
+
+        i = i + 1
+    end
+
+    -- the final pointer value is not observable, but keeping it costs one instruction
+    -- and keeps the IR honest for anything appended later
+    materialise()
+
+    local k = 1
+
+    while (k <= outN) do
+        instList[k] = out[k]
+        k = k + 1
+    end
+
+    k = inputSize
+
+    while (k > outN) do
+        instList[k] = nil
+        k = k - 1
+    end
+
+    if STATS then
+        print("--Offset addressing pass : ", movesIn - movesOut, "pointer moves removed")
     end
 end
 
@@ -700,6 +882,7 @@ local brainfuck = function(s)
     firstPassOptimization(instList)
     secondPassMemset(instList)
     thirdPassUnRolledAssignation(instList)
+    fourthPassOffsetAddressing(instList)
 
     if autoDetectSubfunctionDispatching and type(jit) == "table" and countIRInsWeight(instList) > subFunctionMaxSize then
         shouldCreateSubFunctions = true
@@ -728,20 +911,63 @@ else
 end
 local i = 0
 
-local w = function(c)
-	io.write(string.char(c))
-end
+-- Output is buffered : io.write(string.char(c)) per '.' costs a C call plus an interned string
+-- allocation for every single byte. We accumulate instead and hand over whole blocks.
+local w, w2, flush
+if ffi then
+	local OUTCAP = 65536
+	local outbuf = ffi.new("uint8_t[?]", OUTCAP)
+	local outn = 0
+	local ffi_string = ffi.string
 
-local w2 = function(c, count)
-	local char = string.char(c)
-	local i = 0
-	while (i < count) do
-		io.write(char)
-		i = i + 1
+	flush = function()
+		if outn > 0 then
+			io.write(ffi_string(outbuf, outn))
+			outn = 0
+		end
+	end
+
+	w = function(c)
+		if outn == OUTCAP then flush() end
+		outbuf[outn] = c
+		outn = outn + 1
+	end
+
+	w2 = function(c, count)
+		while count > 0 do
+			if outn == OUTCAP then flush() end
+			local n = OUTCAP - outn
+			if n > count then n = count end
+			ffi.fill(outbuf + outn, n, c)
+			outn = outn + n
+			count = count - n
+		end
+	end
+else
+	local outbuf, outn = {}, 0
+
+	flush = function()
+		if outn > 0 then
+			io.write(table.concat(outbuf, "", 1, outn))
+			outn = 0
+		end
+	end
+
+	w = function(c)
+		outn = outn + 1
+		outbuf[outn] = string.char(c)
+		if outn == 8192 then flush() end
+	end
+
+	w2 = function(c, count)
+		outn = outn + 1
+		outbuf[outn] = string.rep(string.char(c), count)
+		if outn == 8192 then flush() end
 	end
 end
 
 local r = function()
+    flush() -- anything written so far has to reach the terminal before we block on input
     local c = io.read(1)
     if c then return string.byte(c) else return 0 end
 end
@@ -826,7 +1052,7 @@ end
         i = i + 1
     end
 
-    code = code .. table.concat(insTableStr, "\n")
+    code = code .. table.concat(insTableStr, "\n") .. "\nflush()\n"
 
     if STATS then
         print("Compilation time took :", os.clock() - compilationT)
